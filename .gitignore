@@ -13,3 +13,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Review transcripts: kept for the record, not part of the release
+review-archive/
