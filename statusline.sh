@@ -59,7 +59,12 @@ EOF
 # a naive digits-or-dot test while being no number at all.
 pk_int()  { case "$1" in ''|*[!0-9]*|0?*) return 1 ;; *) return 0 ;; esac; }
 pk_pct()  {
-    case "$1" in ''|*[!0-9.]*|*.*.*|.|0?*) return 1 ;; esac
+    # `0?*` was meant to catch a leading zero like "08", but it also matches "0.5" - so
+    # every percentage below one was thrown away and its whole block vanished from the
+    # line. Found on the fourth review, and my own tests missed it because I only tried
+    # to break this function, never to feed it a small valid number.
+    case "$1" in ''|*[!0-9.]*|*.*.*|.) return 1 ;; esac
+    case "$1" in 0[0-9]*) return 1 ;; esac
     case "${1%%.*}" in ''|*[!0-9]*) return 1 ;; esac
     [ "${1%%.*}" -le 100 ] 2>/dev/null || return 1
     return 0
