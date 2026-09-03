@@ -535,18 +535,46 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # enough to change what the next window is measured against.
     if [ "$_rl_write" = yes ] && [ "$_rl_fresh" = yes ] && [ "$_rl_locked" = yes ] \
        && [ -n "$week_reset" ] && [ "$week_reset" != "null" ] && [ -n "$_wp_int" ]; then
-        _qo_origin=""; _qo_line=""
+        _qo_origin=""; _qo_line=""; _qo_seen=""
         [ -f "$HOME/.claude/quota-origin" ] &&
             { read -r _qo_line < "$HOME/.claude/quota-origin" 2>/dev/null || _qo_line=""; }
         if [ -n "$_qo_line" ] && [ "${_qo_line#*\"week_reset\":}" != "$_qo_line" ]; then
             _qo_w=${_qo_line#*\"week_reset\":}; _qo_w=${_qo_w%%,*}
             _qo_t=${_qo_line#*\"origin_ts\":}; _qo_t=${_qo_t%%,*}
-            [ "$_qo_w" = "$week_reset" ] && _qo_origin=$_qo_t
+            _qo_s=${_qo_line#*\"seen_pct\":\"}; _qo_s=${_qo_s%%\"*}; _qo_s=${_qo_s%%.*}
+            if [ "$_qo_w" = "$week_reset" ]; then
+                _qo_origin=$_qo_t
+                _qo_seen=$_qo_s
+            fi
+        fi
+        # WHICH EARLIER READING THE DROP IS JUDGED AGAINST.
+        # The shared snapshot first, because it is arbitrated for freshness across every open
+        # session. But `rate-limits.json` is only written when PUBLISH_STATE=yes (see the
+        # publish guard above), so with publication off `$_rl_o7p` is empty on EVERY redraw and
+        # the drop could never be seen at all: the headline feature - noticing a counter that
+        # restarted mid-window - was silently off for anyone who answered "no" to the install
+        # question, which is the default answer. Measured 2026-09-03: two renders, 40% then 2%,
+        # same `seven_day_resets_at`. With publication on: `d1/4 ... today still 23.0%`. With it
+        # off: `d4/7 ... today still 55.1%` - the window still believed to be seven days long,
+        # and the daily balance more than twice what it should be. It errs the PERMISSIVE way,
+        # which is the one direction this program says it will never err in.
+        # So fall back to `seen_pct`, the reading THIS machine wrote last: it is already in
+        # quota-origin, already tied to a `week_reset` that has just been checked to match, and
+        # it discloses nothing new - which is what makes it usable while publication is off.
+        # HONEST ABOUT THE LIMIT: with publication off there is no freshness arbitration, so an
+        # idle session can write a high `seen_pct` after a live one wrote a low one, and the next
+        # render then reads a drop that never happened. That mistake SHORTENS the window and
+        # tightens the daily share, which is the conservative direction - the same trade the
+        # ten-point threshold already accepts.
+        _qo_prev=""
+        if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ]; then
+            _qo_prev=$_rl_o7p
+        elif [ -n "$_qo_seen" ]; then
+            _qo_prev=$_qo_seen
         fi
         if [ -z "$_qo_origin" ]; then
             _qo_origin=$(( week_reset - 604800 ))          # finestra nuova: origine nominale
-        elif [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ] \
-             && [ $(( _rl_o7p - _wp_int )) -ge 10 ] 2>/dev/null; then
+        elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null; then
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
         fi
         # Per-process temporary name: two redraws landing together must not share one.
