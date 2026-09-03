@@ -28,6 +28,19 @@ CONF="$CLAUDE_DIR/subscription.conf"
 MANIFEST_DIR="$CLAUDE_DIR/.pacekeeper"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
+# The stamp names the manifest, and the manifest is the ONLY record of what this machine
+# looked like BEFORE an install. Two installs inside the same second shared one name and
+# the second overwrote the first, so `--uninstall` went back to the state BETWEEN them:
+# it announced "going back to before <the first install>", reported every file restored,
+# and left the machine installed with the status line still wired into settings.json.
+# The .bak names have carried a collision suffix since the first version; the manifest
+# never did. Measured 2026-09-03 by running two installs with the clock pinned.
+_stamp_n=1
+while [ -e "$MANIFEST_DIR/$STAMP.manifest" ]; do
+    STAMP="$(date +%Y%m%d-%H%M%S)-$_stamp_n"
+    _stamp_n=$((_stamp_n + 1))
+done
+
 # Where a no-clone install fetches from. A TAG, never a branch: with a branch, whoever
 # runs the one-liner gets whatever was pushed a second ago, which nobody has tried.
 PACEKEEPER_REF="${PACEKEEPER_REF:-v${VERSION}}"
@@ -183,9 +196,17 @@ list_installs() {
 }
 
 pretty_stamp() {
-    local s="$1"
-    printf '%s-%s-%s %s:%s:%s' \
-        "${s:0:4}" "${s:4:2}" "${s:6:2}" "${s:9:2}" "${s:11:2}" "${s:13:2}"
+    # Anything past the seconds is the collision suffix, and it has to be SHOWN: two
+    # installs in the same second would otherwise offer the chooser two lines reading
+    # exactly the same date, with no way to tell which is which.
+    # Two statements, not one: `local` is a builtin, so every word on its line is
+    # expanded BEFORE the builtin assigns anything - `local s="$1" extra="${s:15}"`
+    # expanded ${s:15} against the PREVIOUS s and handed back an empty suffix, silently.
+    local s="$1" extra
+    extra="${s:15}"
+    printf '%s-%s-%s %s:%s:%s%s' \
+        "${s:0:4}" "${s:4:2}" "${s:6:2}" "${s:9:2}" "${s:11:2}" "${s:13:2}" \
+        "${extra:+ (#${extra#-})}"
 }
 
 if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
@@ -505,6 +526,12 @@ if [ "$ASSUME_YES" = 0 ]; then
     say "   script of yours cannot read them any other way. Saying yes writes them to"
     say "   ~/.claude/quota-state and a few sibling files, which contain paths, session"
     say "   ids and usage figures. Say no unless something of yours is going to read them."
+    # Naming the exception here, not only in the README: somebody who answers this
+    # question and never opens the README would otherwise find a file they were told
+    # would not be there.
+    say "   One small file, ~/.claude/quota-origin, is written either way - four numbers,"
+    say "   no paths and no session ids. Without it the line cannot tell a shortened"
+    say "   weekly window from a full one, which is the thing it exists to notice."
     if yesno "   Write them?" "n"; then
         PUBLISH="yes"
     fi
