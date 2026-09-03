@@ -127,7 +127,11 @@ yesno() {
 # overwrite that instead — outside the directory the user agreed to let us touch.
 refuse_symlinks() {
     local target
-    for target in $TOUCHED; do
+    # The runtime paths are in this list too. They were not, and a symlink among them was
+    # dereferenced on backup and replaced by a regular file on restore - so the link the
+    # user had put there was quietly destroyed. A dangling one was even recorded as
+    # "absent", because both -f and -e are false for it, and then deleted on uninstall.
+    for target in $TOUCHED $ARTIFACT_FILES $ARTIFACT_DIRS; do
         if [ -L "$CLAUDE_DIR/$target" ]; then
             die "$CLAUDE_DIR/$target is a symlink. Refusing to write through it — resolve it by hand first."
         fi
@@ -547,8 +551,35 @@ mv -f "$manifest_tmp" "$manifest" || die "could not write the install manifest"
 trap - EXIT INT TERM
 say "  manifest written to ${manifest##*/}"
 
+# The file header promises "fully installed or exactly as it was", and a sequence of
+# plain copies does not keep that promise: a failure halfway leaves half an install.
+# Everything is staged beside its destination first; only when every copy has succeeded
+# are they renamed into place, and a rename on the same filesystem does not half-happen.
+# Anything that still goes wrong puts the machine back from the manifest.
+rollback() {
+    local target state backup
+    while IFS=$'\t' read -r target state backup; do
+        [ -n "$target" ] || continue
+        if [ "$state" = existed ] && [ -n "$backup" ] && [ -f "$CLAUDE_DIR/$backup" ]; then
+            cp "$CLAUDE_DIR/$backup" "$CLAUDE_DIR/$target" 2>/dev/null || true
+        elif [ "$state" = absent ]; then
+            rm -f "$CLAUDE_DIR/$target" 2>/dev/null || true
+        fi
+    done < "$manifest"
+    rm -f "$CLAUDE_DIR"/*.pacekeeper.new."$$" 2>/dev/null || true
+}
+
 for f in $FILES; do
-    cp "$SRC_DIR/$f" "$CLAUDE_DIR/$f"
+    if ! cp "$SRC_DIR/$f" "$CLAUDE_DIR/$f.pacekeeper.new.$$"; then
+        rm -f "$CLAUDE_DIR"/*.pacekeeper.new."$$" 2>/dev/null || true
+        die "could not stage $f — nothing was changed"
+    fi
+done
+for f in $FILES; do
+    if ! mv -f "$CLAUDE_DIR/$f.pacekeeper.new.$$" "$CLAUDE_DIR/$f"; then
+        rollback
+        die "could not install $f — the machine was put back"
+    fi
 done
 chmod +x "$CLAUDE_DIR/statusline.sh" "$CLAUDE_DIR/pacekeeper-quota"
 say "  four files copied into $CLAUDE_DIR"
@@ -564,11 +595,13 @@ tmp_settings="$SETTINGS.pacekeeper.tmp.$$"
 if ! jq '.statusLine = {"type":"command","command":"~/.claude/statusline.sh","refreshInterval":8}' \
         "$SETTINGS" > "$tmp_settings"; then
     rm -f "$tmp_settings"
-    die "could not update $SETTINGS — nothing else was changed"
+    rollback
+    die "could not update $SETTINGS — the machine was put back"
 fi
 if ! mv -f "$tmp_settings" "$SETTINGS"; then
     rm -f "$tmp_settings"
-    die "could not replace $SETTINGS"
+    rollback
+    die "could not replace $SETTINGS — the machine was put back"
 fi
 say "  settings.json points at the status line"
 

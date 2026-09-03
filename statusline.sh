@@ -444,8 +444,15 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # Sixty seconds is far longer than any redraw and far shorter than a session.
         _rl_lock_age=$(( _rl_now - $(pk_mtime "$_rl_lock") ))
         if [ "$_rl_lock_age" -gt 60 ] 2>/dev/null; then
-            rm -f "$_rl_lock/owner" 2>/dev/null || true
-            rmdir "$_rl_lock" 2>/dev/null || true
+            # Taking over goes through a RENAME, which is atomic: only one process can
+            # succeed in moving the stale directory aside, so nobody can delete a lock
+            # that somebody else took in the meantime. Removing it in place left a gap
+            # between "I saw it was old" and "I removed it" - long enough for another
+            # process to acquire a fresh one and have it deleted underneath.
+            _rl_dead="$_rl_lock.dead.$$"
+            if mv "$_rl_lock" "$_rl_dead" 2>/dev/null; then
+                rm -rf "$_rl_dead" 2>/dev/null || true
+            fi
             if mkdir "$_rl_lock" 2>/dev/null; then
                 { printf '%s\n' "$_rl_token" > "$_rl_lock/owner"; } 2>/dev/null
                 _rl_locked=yes
@@ -509,7 +516,6 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # Released as soon as the shared file is settled. Everything after this point either
     # writes a per-session file or a file derived from what was just decided.
     _rl_took_lock=$_rl_locked
-    pk_unlock
 
     # --- WHERE THE WEEKLY COUNTER REALLY STARTED ---
     # The 7-day window and the counter that fills it can have two DIFFERENT origins.
@@ -549,6 +555,14 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
             > "$HOME/.claude/quota-origin.tmp.$$" \
             && mv -f "$HOME/.claude/quota-origin.tmp.$$" "$HOME/.claude/quota-origin"; } 2>/dev/null
     fi
+
+    # THE LOCK IS RELEASED HERE, at the end of the whole shared-state transaction, and
+    # not one line earlier. Releasing it before this block meant `quota-origin` demanded
+    # a lock that had just been given up, so it was NEVER written and every shortened
+    # window silently reverted to looking like seven days - the one thing this program
+    # exists to notice. Found on the fifth review; the parallel test that came before it
+    # checked the shared file and never looked at this one.
+    pk_unlock
 fi
 
 # --- Persisting CONTEXT SATURATION, per session ---
