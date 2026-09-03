@@ -186,7 +186,7 @@ if [ "$LANG_IT" = 1 ]; then
     T_LEFT="resta";        T_RESETS="si azzera tra";  T_STILL="oggi ancora"
     T_OVER="oggi oltre di"; T_SUB="abbonamento";      T_BILL="addebito"
     T_TODAY="oggi";        T_TOMORROW="domani";       T_IN="tra"
-    T_EXPECTED="oggi, atteso alle";                   T_DAY="g"
+    T_DAY="g"
     T_DECSEP=","
     T_PAUSED="IN PAUSA";   T_STOPPED="FERMATA";   T_CRASH="CRASH"
     T_INTERRUPTED="INTERROTTA"; T_UNKNOWN="STATO IGNOTO"
@@ -196,7 +196,7 @@ else
     T_LEFT="left";         T_RESETS="resets in";      T_STILL="today still"
     T_OVER="today over by"; T_SUB="plan";             T_BILL="billed"
     T_TODAY="today";       T_TOMORROW="tomorrow";     T_IN="in"
-    T_EXPECTED="today, expected at";                  T_DAY="d"
+    T_DAY="d"
     T_DECSEP="."
     T_PAUSED="PAUSED";     T_STOPPED="STOPPED";   T_CRASH="CRASH"
     T_INTERRUPTED="INTERRUPTED"; T_UNKNOWN="UNKNOWN STATE"
@@ -822,14 +822,16 @@ fi
 renew_block=""
 renew_conf="$HOME/.claude/subscription.conf"
 renew_days=""
+renew_hhmm=""
 renew_cache="${cache_dir}/renew"
 
 # The number of days changes once a day: caching it until midnight avoids starting python3
 # on every refresh of the status line.
 if [ -f "$renew_cache" ] && [ ! "$renew_conf" -nt "$renew_cache" ]; then
-    IFS=' ' read -r cached_until cached_days < "$renew_cache" 2>/dev/null
+    IFS=' ' read -r cached_until cached_days cached_time < "$renew_cache" 2>/dev/null
     if [ -n "$cached_until" ] && [ "$now" -lt "$cached_until" ] 2>/dev/null; then
         renew_days="$cached_days"
+        renew_hhmm="$cached_time"
     fi
 fi
 
@@ -839,8 +841,16 @@ if [ -z "$renew_days" ] && [ -f "$renew_conf" ]; then
     # the charge, not at midnight. Measured 2026-09-03: charged at 15:41, and at 17:10 the
     # line still read "billed today, expected at 15:41" - future tense for something that had
     # already happened, on the one day of the year anybody looks at it.
-    IFS=' ' read -r renew_days renew_until <<EOF
-$(python3 -c "
+    # The program goes in through a QUOTED heredoc, never `python3 -c "..."`. Inside a
+    # double-quoted shell string every `"` in the Python - including the ones in its own
+    # comments - closes the string, and whatever follows is word-split. Measured 2026-09-03:
+    # a comment reading `"today" becomes "in 30 days"` cut the program at the spaces inside
+    # `in 30 days`; python received a block that ended on `if target:` with nothing under it,
+    # raised an IndentationError into a discarded stderr, and printed nothing. The countdown
+    # to the charge disappeared from the status line with no error anywhere on the machine,
+    # and only when the config file was next touched - the cached number was serving until
+    # then. A quoted heredoc expands nothing, so no comment can ever do this again.
+    renew_raw=$(python3 - "$renew_conf" 2>/dev/null <<'PY'
 import calendar, datetime, sys
 
 conf = {}
@@ -909,14 +919,20 @@ if target:
     # the instant of the charge: that is where "today" becomes "in 30 days".
     midnight = datetime.datetime.combine(today + datetime.timedelta(days=1), datetime.time(0, 0))
     until = min(midnight, instant(target)) if target == today else midnight
-    print((target - today).days, int(until.timestamp()))
-" "$renew_conf" 2>/dev/null)
+    # The time goes back out as a THIRD field. Whoever draws the countdown must not parse
+    # this file a second time: two parsers mean two grammars, and the shell one accepted
+    # 99:99 - ninety-nine hours after midnight - while this one had already rejected it.
+    print((target - today).days, int(until.timestamp()), hhmm.strftime('%H:%M') if hhmm else '-')
+PY
+)
+    IFS=' ' read -r renew_days renew_until renew_hhmm <<EOF
+$renew_raw
 EOF
 
     if [ -n "$renew_days" ] && [ -n "$renew_until" ]; then
         mkdir -p "$cache_dir" 2>/dev/null
         tmp_renew="${renew_cache}.$$"
-        printf '%s %s' "$renew_until" "$renew_days" > "$tmp_renew" 2>/dev/null &&
+        printf '%s %s %s' "$renew_until" "$renew_days" "${renew_hhmm:--}" > "$tmp_renew" 2>/dev/null &&
             mv -f "$tmp_renew" "$renew_cache" 2>/dev/null
     fi
 fi
@@ -972,17 +988,22 @@ fi
 # RENEWAL_TIME=HH:MM in subscription.conf. Without that line it behaves as it did before.
 if [ -n "$renew_days" ] || [ -n "$tier_label" ]; then
     renew_when=""
-    renew_time=""
-    [ -f "$renew_conf" ] && renew_time=$(sed -n 's/^[[:space:]]*RENEWAL_TIME[[:space:]]*=[[:space:]]*//p' "$renew_conf" 2>/dev/null | tail -1)
+    # The time arrives already validated, from the one parser that owns this file, and is
+    # checked again here because a cache file can be hand-edited or left over from an older
+    # version. The check is not politeness: an arithmetic expansion that fails does not just
+    # skip its own line, it ABANDONS THE WHOLE ENCLOSING COMPOUND. Measured 2026-09-03 with
+    # RENEWAL_TIME=ab:cd - `10#ab` printed a bash error onto the terminal and every line
+    # after it inside this `if`, `renew_block` included, never ran: the plan and the charge
+    # vanished from the status line together, and nothing said why.
+    renew_time="$renew_hhmm"
+    case "$renew_time" in
+        [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
+        *) renew_time="" ;;
+    esac
     if [ -n "$renew_time" ] && [ "$renew_days" -le 1 ] 2>/dev/null; then
-        _rh=${renew_time%%:*}; _rm=${renew_time##*:}
-        if [ "$_rh" != "$renew_time" ] 2>/dev/null; then
-            _rt=$(( midnight_ts + renew_days * 86400 + 10#$_rh * 3600 + 10#$_rm * 60 ))
-            if [ "$_rt" -gt "$now" ]; then
-                renew_when="${T_IN} $(fmt_dh $(( _rt - now )))"
-            elif [ "$renew_days" -eq 0 ]; then
-                renew_when="${T_EXPECTED} ${renew_time}"
-            fi
+        _rt=$(( midnight_ts + renew_days * 86400 + 10#${renew_time%%:*} * 3600 + 10#${renew_time##*:} * 60 ))
+        if [ "$_rt" -gt "$now" ]; then
+            renew_when="${T_IN} $(fmt_dh $(( _rt - now )))"
         fi
     fi
     if [ -z "$renew_when" ] && [ -n "$renew_days" ]; then
@@ -1028,7 +1049,8 @@ done
 # really is what the session cost.
 cost_info=""
 if [ "$is_subscriber" = false ] && [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ] && [ -f "$transcript_path" ]; then
-    cost=$(python3 -c "
+    # Quoted heredoc, for the reason written over the renewal block.
+    cost=$(python3 - "$transcript_path" 2>/dev/null <<'PY' || echo "0"
 import json, sys
 
 PRICING = {
@@ -1042,6 +1064,7 @@ PRICING = {
 DEFAULT = {'in': 3.0, 'out': 15.0, 'cw': 3.75, 'cr': 0.30}
 
 total = 0.0
+unknown = False
 try:
     with open(sys.argv[1]) as f:
         for line in f:
@@ -1055,9 +1078,16 @@ try:
                 # An unknown model used to be priced as Sonnet, which understates a
                 # more expensive one by multiples. A cost that is silently wrong is
                 # worse than no cost at all, so an unrecognised model abandons the sum.
+                # It has to abandon it from OUT HERE: raising inside the per-line try
+                # was caught by the handler two lines down, so the unknown model was
+                # merely skipped and the sum was printed anyway. Measured 2026-09-03:
+                # one known message and one unpriced model showed $15.00 for a
+                # transcript worth over a thousand - the exact failure the comment
+                # above says is worse than printing nothing.
                 p = next((v for k, v in PRICING.items() if k in model), None)
                 if p is None:
-                    raise ValueError('unknown model')
+                    unknown = True
+                    break
                 total += (
                     usage.get('input_tokens', 0) * p['in'] +
                     usage.get('output_tokens', 0) * p['out'] +
@@ -1068,14 +1098,19 @@ try:
                 pass
 except Exception:
     pass
+if unknown:
+    sys.exit()
 print(f'{total:.4f}')
-" "$transcript_path" 2>/dev/null || echo "0")
+PY
+)
 
-    formatted=$(python3 -c "
-c=float('$cost')
+    formatted=$(python3 - "$cost" 2>/dev/null <<'PY'
+import sys
+c = float(sys.argv[1])
 if c > 0.0001:
-    print(f'\${c:.4f}' if c < 0.01 else f'\${c:.2f}')
-" 2>/dev/null)
+    print(f'${c:.4f}' if c < 0.01 else f'${c:.2f}')
+PY
+)
     [ -n "$formatted" ] && cost_info=" ${GRAY}≈${formatted}${RESET}"
 fi
 
