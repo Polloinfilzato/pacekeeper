@@ -1057,7 +1057,7 @@ fi
 # Assembling line 2: whichever blocks exist, separated by a vertical bar
 sep="${GRAY}   │   "
 rate_info=""
-for blk in "$five_block" "$week_block" "$renew_block" "$bmad_block"; do
+for blk in "$five_block" "$week_block" "$renew_block"; do
     [ -z "$blk" ] && continue
     if [ -z "$rate_info" ]; then
         rate_info="  ${blk}"
@@ -1066,6 +1066,16 @@ for blk in "$five_block" "$week_block" "$renew_block" "$bmad_block"; do
     fi
 done
 [ -n "$rate_info" ] && rate_info="${rate_info}${RESET}"
+
+# Assembling line 3: the bmad-loop run, on a line of its own.
+# It used to ride at the end of line 2, after the two quota windows and the renewal
+# countdown. Three blocks and two separators come first, so by the time the run gets its
+# turn the text is past the width of an ordinary terminal: it wraps, or the terminal cuts
+# it, and the one block that changes minute by minute is the one you cannot read. Its own
+# line costs a row only while a run exists - with no run, `bmad_info` is empty and nothing
+# is printed, exactly as before.
+bmad_info=""
+[ -n "$bmad_block" ] && bmad_info="  ${bmad_block}${RESET}"
 
 # --- Session cost, computed from the transcript ---
 # NOTE: this is a THEORETICAL "as-if pay-per-use" cost, summed from the transcript tokens at
@@ -1522,5 +1532,10 @@ printf "%s%s%s%s%s %s%s%s\n" \
 # Line 2: the usage windows in detail (Claude.ai subscribers only)
 if [ -n "$rate_info" ]; then
     printf "%s\n" "${rate_info}"
+fi
+
+# Line 3: the bmad-loop run, when there is one
+if [ -n "$bmad_info" ]; then
+    printf "%s\n" "${bmad_info}"
 fi
 exit 0

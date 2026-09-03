@@ -9,7 +9,7 @@
 # throwaway home and a throwaway TMPDIR, because this program WRITES while it runs: a
 # check that "only reads" once destroyed a real quota record on the author's machine.
 #
-# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces seven of the repaired defects
+# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces eight of the repaired defects
 # into a copy of the sources, one at a time, and asserts the suite goes RED for each. A
 # suite that has never been seen to fail certifies nothing.
 
@@ -30,7 +30,7 @@ esac
 trap 'rm -rf "$ROOT"' EXIT
 
 # ------------------------------------------------------------------- --prove
-# A suite nobody has seen fail certifies nothing. This re-introduces seven of the defects
+# A suite nobody has seen fail certifies nothing. This re-introduces eight of the defects
 # that were actually repaired, one at a time, into a COPY of the sources, and demands that
 # the suite go red for each. If one of them comes back green, that case is decoration.
 if [ "${1:-}" = "--prove" ]; then
@@ -64,7 +64,7 @@ PY
         fi
     }
 
-    printf 'Putting seven repaired defects back, one at a time:\n\n'
+    printf 'Putting eight repaired defects back, one at a time:\n\n'
 
     prove_one "the renewal countdown prints nothing" statusline.sh \
         "    print((target - today).days, int(until.timestamp()), hhmm.strftime('%H:%M') if hhmm else '-')" \
@@ -93,6 +93,10 @@ PY
     prove_one "the restart is judged only against the published file" statusline.sh \
         "        elif [ -n \"\$_qo_seen\" ]; then" \
         "        elif [ -n \"\" ]; then"
+
+    prove_one "the bmad run goes back onto line 2" statusline.sh \
+        "[ -n \"\$bmad_block\" ] && bmad_info=\"  \${bmad_block}\${RESET}\"" \
+        "[ -n \"\$bmad_block\" ] && rate_info=\"\${rate_info}\${sep}\${bmad_block}\${RESET}\""
 
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
@@ -157,6 +161,8 @@ render() {
     OUT=$(printf '%s' "$OUT" | LC_ALL=C sed 's/\x1b\[[0-9;]*m//g')
     L1=$(printf '%s' "$OUT" | sed -n '1p')
     L2=$(printf '%s' "$OUT" | sed -n '2p')
+    L3=$(printf '%s' "$OUT" | sed -n '3p')
+    NLINES=$(printf '%s' "$OUT" | grep -c '')
     ERR=$(cat "$home/stderr.txt")
 }
 
@@ -363,6 +369,57 @@ for pub in no yes; do
 done
 
 # =============================================================== 6. installer
+# ============================================== 9. the bmad-loop run's own line
+# The run block used to ride at the END of line 2, after both quota windows and the
+# renewal countdown. Three blocks and two separators come first, so in an ordinary
+# terminal the one thing that changes minute by minute was the part that got wrapped
+# or cut. It now has line 3 to itself - but only when a run exists, because a row
+# spent on nothing is a row taken from the terminal for ever.
+section "The bmad-loop run has a line to itself"
+
+US=$(printf '\037')
+
+# Plants a run in the block's own cache, so no bmad-loop and no python is consulted:
+# the payload under test is exactly the one written here. $1 home, $2 payload.
+plant_run() {
+    local h="$1" key cdir
+    cp "$REPO/statusline-bmad.py" "$h/.claude/statusline-bmad.py"
+    mkdir -p "$h/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$h/bin/bmad-loop"; chmod +x "$h/bin/bmad-loop"
+    key=$(printf '%s' /tmp | cksum | cut -d' ' -f1)
+    cdir="$h/tmp//cc-statusline-cache-$(id -u 2>/dev/null || echo 0)"
+    mkdir -p "$cdir"
+    { printf '%s\n' "$(( $(date +%s) + 300 ))"; printf '%s\n' "$2"; } > "$cdir/bmad-$key"
+}
+
+h=$(new_home)
+plant_run "$h" "running${US}7-4${US}dev${US}2820${US}${US}0${US}0"
+_pk_path=$PATH; PATH="$h/bin:$PATH"
+render "$h" "$(payload 22.5 41.2)"
+PATH=$_pk_path
+has    "B1  a live run lands on line 3"            "bmad 7-4" "$L3"
+has    "B2  with its phase and elapsed time"       "47m (dev)" "$L3"
+hasnt  "B3  and line 2 no longer carries it"       "bmad"     "$L2"
+has    "B4  line 2 still carries the quota windows" "7d"       "$L2"
+equals "B5  three lines in all"                    "3"        "$NLINES"
+quiet  "B6"
+
+# A paused run says why and where, still on its own line.
+h=$(new_home)
+plant_run "$h" "paused${US}7-4${US}review${US}600${US}budget${US}0${US}2"
+_pk_path=$PATH; PATH="$h/bin:$PATH"
+render "$h" "$(payload 22.5 41.2)"
+PATH=$_pk_path
+has    "B7  a paused run keeps its reason on line 3" "budget"  "$L3"
+hasnt  "B8  and still nothing on line 2"             "bmad"    "$L2"
+
+# No run: the row must not be paid for. Two lines, exactly as before this change.
+h=$(new_home)
+render "$h" "$(payload 22.5 41.2)"
+equals "B9  no run, no third line"                 "2"        "$NLINES"
+equals "B10 and line 3 is empty"                   ""         "$L3"
+quiet  "B11"
+
 section "The installer, executed rather than read"
 
 shim=$(mktemp -d "$ROOT/shim.XXXXXX")

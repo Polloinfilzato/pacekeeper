@@ -16,7 +16,8 @@ goes red, you are borrowing from tomorrow.
 
 ```
  pacekeeper   main*  ██████░░░░ 62%  cache ⬤  47m  ⛭ 2/3 · 4/9  [Opus 5] [high]
-  5h left 78% · resets in 1h 12m   │   7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)   │   plan Max 5x · billed in 12d   │   bmad 7-4 ⏵ 47m (dev)
+  5h left 78% · resets in 1h 12m   │   7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)   │   plan Max 5x · billed in 12d
+  bmad 7-4 ⏵ 47m (dev)
 ```
 
 ---
@@ -153,7 +154,6 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 | **5-hour window** | `5h left 78% · resets in 1h 12m` | on a Claude.ai subscription |
 | **7-day window** | `7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
-| **bmad-loop run** | `bmad 7-4 ⏵ 47m (dev)` | only if `bmad-loop` is installed and a run is alive |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
 the colour never contradicts the number. Green above 25% left, orange below, red below 10%.
@@ -171,8 +171,17 @@ finding it, including the exact prompt to hand to Claude Code so it can look it 
 The countdown knows the *instant*, not just the day: a subscription that renewed at 15:41 stops
 saying "today" at 15:41, not at midnight.
 
-**bmad-loop.** For users of [bmad-loop](https://pypi.org/project/bmad-loop/), the unattended
-story-runner. It shows the live run — never the finished ones, which would occupy the line
+### Line 3 — the bmad-loop run
+
+For users of [bmad-loop](https://pypi.org/project/bmad-loop/), the unattended story-runner.
+
+**It has a line to itself, and only when a run exists.** It used to ride at the end of line 2,
+behind both quota windows and the renewal countdown. Three blocks and two separators come first,
+so in an ordinary terminal the block that changes minute by minute was the one pushed past the
+right-hand edge — wrapped, or cut. With no run alive nothing is printed at all and the status line
+is two lines, exactly as it was.
+
+It shows the live run — never the finished ones, which would occupy the line
 forever — with the state as a symbol when things are fine and as a word when they are not:
 
 | | |
@@ -367,8 +376,8 @@ instead of switching over at the exact hour.
 ## Tests
 
 ```sh
-./tests/run.sh            # 94 cases, about ten seconds
-./tests/run.sh --prove    # put seven repaired defects back, one at a time, and watch it go red
+./tests/run.sh            # 106 cases, about ten seconds
+./tests/run.sh --prove    # put eight repaired defects back, one at a time, and watch it go red
 ```
 
 Every case runs against a throwaway `$HOME` and a throwaway `TMPDIR`. Nothing here ever touches
@@ -379,10 +388,12 @@ The suite covers the renewal countdown in twelve configurations, the `RENEWAL_TI
 eleven (including a corrupt value planted directly in the cache, which is the only route by which
 an unchecked time can still reach shell arithmetic), the percentage grammar in both directions,
 the theoretical cost, what does and does not land on disk under each answer to the install
-question, the mid-window restart with publishing both on and off, and the installer itself — installed, re-installed over itself, uninstalled, and asked
+question, the mid-window restart with publishing both on and off, which line the bmad-loop run
+lands on and whether it is printed at all, and the installer itself — installed, re-installed over
+itself, uninstalled, and asked
 to go back to a specific one of three installs that all happened inside the same second.
 
-**`--prove` is not decoration.** Seven defects that were genuinely found and repaired here are put
+**`--prove` is not decoration.** Eight defects that were genuinely found and repaired here are put
 back into a copy of the sources, one at a time, and the suite has to fail for each of them. Six
 adversarial review passes read this program and missed five defects between them; every one of the
 five was found the moment somebody *ran* it. Reading is not the filter.
