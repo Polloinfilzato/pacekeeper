@@ -56,7 +56,8 @@ if ! printf '%s' "$reading" | jq -e '
         and (.day     | type) == "number" and (.day   | floor) == .day and .day  >= 1
         and (.days    | type) == "number" and (.days  | floor) == .days and .days >= 1
         and .day <= .days
-        and (.balance | type) == "number" and (.balance | isnan | not)' >/dev/null 2>&1; then
+        and (.balance | type) == "number" and (.balance | isnan | not)
+        and (.balance | isinfinite | not) and .balance >= -1000 and .balance <= 1000' >/dev/null 2>&1; then
     echo "STOP  the reader returned something this guard cannot trust"
     exit 2
 fi

@@ -79,11 +79,12 @@ practice that is what stops a window left open since yesterday from speaking for
 **What it does NOT do, stated plainly, because the difference matters.** The payload carries no
 observation timestamp, so two snapshots sharing a five-hour deadline cannot be ordered at all;
 inside that window the rule assumes consumption only rises, which is true except in the minutes
-after a mid-window counter reset. And the read-compare-write is not locked, so two redraws landing
-together can both decide they are the fresher one.
+after a mid-window counter reset.
 
-This is a mitigation, not a guarantee, and it cannot become one without a field the input does not
-contain. It is why the published file carries `ts`, and why `pacekeeper-quota` refuses a reading
+The concurrent race is fixed — the comparison is locked — but **the ordering ambiguity is not, and
+a lock cannot fix it**: serialising two writers does not tell you which of their snapshots was
+observed first. This is a mitigation, not a guarantee, and it cannot become one without a field the
+input does not carry. It is why the published file carries `ts`, and why `pacekeeper-quota` refuses a reading
 older than five minutes rather than trusting the arbitration to have been right.
 
 ### 4. It reads the cache TTL instead of assuming it
@@ -216,11 +217,12 @@ say yes. The config file and the shared quota file are written with `0600`.
 
 Everything is created private to you (`0600`, inside `0700` directories).
 
-**On the word "atomic", precisely.** `quota-state` and `quota-origin` go through a temporary file
-and a rename, so a reader never sees half of one. The shared and per-session files are written in
-place, and there is **no lock**: two status lines redrawing in the same instant are not serialised.
-For the per-session files that is harmless, since only their own session writes them. For the
-shared one it is a real, if narrow, race — see below.
+**On the word "atomic", precisely.** Every file other tools read is written to a per-process
+temporary name and renamed into place, so a reader never sees half of one. The shared file's whole
+read-compare-write is taken under a lock (an atomic `mkdir`), so two status lines redrawing in the
+same instant cannot both decide they are the fresher one. A lock left behind by a killed process is
+taken over after a minute rather than waited for: this guards a status line, and one that stalls is
+worse than one that occasionally skips a sample.
 
 ### Reading those numbers without getting them wrong
 

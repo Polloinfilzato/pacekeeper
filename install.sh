@@ -216,22 +216,50 @@ if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
     # touched: a line reading `../victim  absent` would otherwise make the removal loop
     # delete outside the directory entirely. A manifest that does not validate aborts
     # the whole operation - a half-understood recovery plan is worse than none.
+    seen=""
     while IFS=$'\t' read -r target state backup; do
         [ -n "$target" ] || continue
+
         known=0
-        for allowed in $TOUCHED $ARTIFACT_FILES $ARTIFACT_DIRS; do
+        is_artifact=0
+        for allowed in $TOUCHED; do
             [ "$target" = "$allowed" ] && known=1
         done
+        for allowed in $ARTIFACT_FILES $ARTIFACT_DIRS; do
+            if [ "$target" = "$allowed" ]; then known=1; is_artifact=1; fi
+        done
         [ "$known" = 1 ] || die "manifest names an unexpected file ($target) — refusing to act on it"
+
+        # A name appearing twice lets a crafted manifest pair an `existed` line with a
+        # later `absent` one and defeat the rule that protects pre-existing state.
+        case " $seen " in
+            *" $target "*) die "manifest names $target more than once" ;;
+        esac
+        seen="$seen $target"
+
         case "$state" in
             existed|absent) : ;;
             *) die "manifest has an unknown state ($state) for $target" ;;
         esac
+
         if [ "$state" = existed ]; then
-            case "$backup" in
-                "$target".pacekeeper-*.bak) : ;;
-                *) die "manifest points $target at an unexpected backup name ($backup)" ;;
-            esac
+            if [ -z "$backup" ]; then
+                # Runtime state is recorded as pre-existing WITHOUT a backup: it is noted
+                # so uninstall knows not to delete it, never restored. Requiring a backup
+                # here made uninstall abort in exactly the case the rule protects.
+                [ "$is_artifact" = 1 ] || die "manifest records $target as existing but names no backup"
+            else
+                # `*` matches slashes, so a name like `x.pacekeeper-/../../outside.bak`
+                # satisfied the pattern and then resolved outside $CLAUDE_DIR entirely.
+                case "$backup" in
+                    */*) die "manifest backup name contains a path separator ($backup)" ;;
+                esac
+                case "$backup" in
+                    "$target".pacekeeper-*.bak) : ;;
+                    *) die "manifest points $target at an unexpected backup name ($backup)" ;;
+                esac
+                [ -f "$CLAUDE_DIR/$backup" ] || die "backup $backup named by the manifest is missing"
+            fi
         fi
     done < "$manifest"
 
@@ -244,8 +272,7 @@ if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
 
     while IFS=$'\t' read -r target state backup; do
         [ -n "$target" ] || continue
-        if [ "$state" = existed ]; then
-            [ -f "$CLAUDE_DIR/$backup" ] || die "backup $backup is missing — nothing was changed"
+        if [ "$state" = existed ] && [ -n "$backup" ]; then
             cp "$CLAUDE_DIR/$backup" "$scratch/$target"
         fi
     done < "$manifest"
@@ -259,8 +286,11 @@ if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
     while IFS=$'\t' read -r target state backup; do
         [ -n "$target" ] || continue
         if [ "$state" = existed ]; then
-            cp "$scratch/$target" "$CLAUDE_DIR/$target"
-            say "  $target restored"
+            # Recorded without a backup means "it was here, leave it alone".
+            if [ -n "$backup" ]; then
+                cp "$scratch/$target" "$CLAUDE_DIR/$target"
+                say "  $target restored"
+            fi
         else
             if [ -f "$CLAUDE_DIR/$target" ]; then
                 rm -f "$CLAUDE_DIR/$target"

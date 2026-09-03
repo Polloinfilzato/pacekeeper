@@ -56,8 +56,10 @@ done
 # The reason text can contain a path, and a path can contain a quote or a backslash.
 # Interpolating it straight into JSON produces something that is not JSON at all, which
 # breaks the caller in a way that looks like our data rather than our formatting.
+# A newline cannot be handled by sed here - sed works a line at a time, so the newline
+# survives and lands raw inside a JSON string, which is not JSON. `tr` sees the bytes.
 json_escape() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g'
+    printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 fail() {
@@ -93,13 +95,20 @@ done < "$STATE"
 # an integer comparison, or interpolates `balance=--5` into its own JSON output, is not
 # doing the job it was written for. A field that is not the shape it claims to be makes
 # the whole reading untrustworthy: there is no partial credit here.
-is_int()  { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+# `01` is not a canonical number and shell arithmetic reads it as octal; `1.` trails a
+# dot into the JSON output. Both used to pass. Digits only, no leading zero unless the
+# whole thing is zero, and a decimal must have digits on both sides of the dot.
+is_int()  { case "$1" in ''|*[!0-9]*|0?*) return 1 ;; *) return 0 ;; esac; }
 # A lone "." contains nothing but a dot, so a digits-or-dot test waves it through - and
 # it then reaches the JSON output as `"balance":.`, which is not JSON. The integer part
 # has to be a number in its own right.
 is_num()  {
-    case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; esac
-    case "${1%%.*}" in ''|*[!0-9]*) return 1 ;; esac
+    case "$1" in ''|*[!0-9.]*|*.*.*|*.) return 1 ;; esac
+    case "${1%%.*}" in ''|*[!0-9]*|0?*) return 1 ;; esac
+    case "$1" in *.*) case "${1#*.}" in ''|*[!0-9]*) return 1 ;; esac ;; esac
+    # A magnitude this large is not a percentage of anything; it is a broken file, and
+    # letting it through means a guard downstream compares nonsense and answers anyway.
+    [ "${1%%.*}" -le 100000 ] 2>/dev/null || return 1
     return 0
 }
 
@@ -109,6 +118,7 @@ is_num "$balance"                  || fail "balance is not a number"
 case "$over" in 0|1) : ;; *)          fail "over is neither 0 nor 1" ;; esac
 [ -z "$week_used_pct" ] || is_num "$week_used_pct" || fail "week_used_pct is not a number"
 is_int "$MAX_AGE"                  || fail "PACEKEEPER_MAX_AGE is not a whole number"
+[ "$MAX_AGE" -le 31536000 ] 2>/dev/null || fail "PACEKEEPER_MAX_AGE is absurdly large"
 
 # Trap 1. ABSENT is fine and means 7: an older status line did not write this field, and
 # a window that was never restarted really is seven days long. PRESENT BUT WRONG is not

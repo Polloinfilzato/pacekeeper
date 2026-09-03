@@ -64,8 +64,16 @@ pk_pct()  {
     [ "${1%%.*}" -le 100 ] 2>/dev/null || return 1
     return 0
 }
-pk_int "$five_reset" || five_reset=""
-pk_int "$week_reset" || week_reset=""
+# An unbounded reset instant is accepted by the grammar and then produces a countdown of
+# nonsense - "resets in 5000000d". Anything further out than a year is not a deadline
+# this program can be looking at, so it is dropped like any other unusable field.
+pk_reset() {
+    pk_int "$1" || return 1
+    [ "$1" -lt 4102444800 ] 2>/dev/null || return 1   # beyond 2100: not a real deadline
+    return 0
+}
+pk_reset "$five_reset" || five_reset=""
+pk_reset "$week_reset" || week_reset=""
 pk_int "$ctx_pct"    || ctx_pct=0
 [ "$ctx_pct" -le 100 ] 2>/dev/null || ctx_pct=100
 pk_pct "$five_pct"   || five_pct=""
@@ -276,8 +284,8 @@ if [ "$git_cached" = false ]; then
     mkdir -p "$cache_dir" 2>/dev/null
     tmp_cache="${git_cache}.$$"
     trap 'rm -f "$tmp_cache" 2>/dev/null' EXIT INT TERM
-    printf '%s' "${git_info:-NOGIT}" > "$tmp_cache" 2>/dev/null &&
-        mv -f "$tmp_cache" "$git_cache" 2>/dev/null
+    { printf '%s' "${git_info:-NOGIT}" > "$tmp_cache" &&
+        mv -f "$tmp_cache" "$git_cache"; } 2>/dev/null
 fi
 
 # --- Safety net for a vanishing branch ---
@@ -402,6 +410,29 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     fi
 
     # 2. the shared file, the one tools read: only if we are the freshest.
+    #
+    # THE WHOLE READ-COMPARE-WRITE IS TAKEN UNDER A LOCK. `mkdir` is the one filesystem
+    # operation that is atomic everywhere and needs no extra tool: it either creates the
+    # directory or fails, and only one caller can win. Without it two redraws landing
+    # together both compare themselves against the same old value, both conclude they are
+    # fresher, and the loser writes last.
+    # A lock does NOT fix the ordering ambiguity documented above - that needs a field the
+    # payload does not carry - and saying otherwise would be the comfortable lie. It fixes
+    # the race, which is a different and cheaper problem.
+    # A lock left behind by a killed process would block every future write, so one older
+    # than a minute is taken over rather than waited for: this guards a status line, and a
+    # status line that stalls is worse than one that occasionally loses a sample.
+    _rl_lock="$HOME/.claude/.rate-limits.lock"
+    _rl_locked=no
+    if mkdir "$_rl_lock" 2>/dev/null; then
+        _rl_locked=yes
+    elif [ -d "$_rl_lock" ]; then
+        _rl_lock_age=$(( _rl_now - $(pk_mtime "$_rl_lock") ))
+        if [ "$_rl_lock_age" -gt 60 ] 2>/dev/null; then
+            rmdir "$_rl_lock" 2>/dev/null || true
+            if mkdir "$_rl_lock" 2>/dev/null; then _rl_locked=yes; fi
+        fi
+    fi
     _rl_write=yes
     _rl_old=""; _rl_o7p=""; _rl_o7r=""; _rl_o5=""
     _rl_fresh=no          # la nostra fotografia e' almeno fresca quanto quella su disco?
@@ -441,8 +472,16 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     else
         _rl_fresh=yes                              # nessun aggregato: siamo i primi
     fi
-    if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ]; then
-        { printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json"; } 2>/dev/null
+    if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ] && [ "$_rl_locked" = yes ]; then
+        { printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json.$$" \
+            && mv -f "$HOME/.claude/rate-limits.json.$$" "$HOME/.claude/rate-limits.json"; } 2>/dev/null
+    fi
+    # Released as soon as the shared file is settled. Everything after this point either
+    # writes a per-session file or a file derived from what was just decided.
+    _rl_took_lock=$_rl_locked
+    if [ "$_rl_locked" = yes ]; then
+        rmdir "$_rl_lock" 2>/dev/null || true
+        _rl_locked=no
     fi
 
     # --- WHERE THE WEEKLY COUNTER REALLY STARTED ---
@@ -474,10 +513,11 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
              && [ $(( _rl_o7p - _wp_int )) -ge 10 ] 2>/dev/null; then
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
         fi
-        printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"%s","stamp":%s}\n' \
+        # Per-process temporary name: two redraws landing together must not share one.
+        { printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"%s","stamp":%s}\n' \
             "$_qo_origin" "$week_reset" "$_wp_int" "$_rl_now" \
-            > "$HOME/.claude/quota-origin.tmp" 2>/dev/null \
-            && mv -f "$HOME/.claude/quota-origin.tmp" "$HOME/.claude/quota-origin" 2>/dev/null
+            > "$HOME/.claude/quota-origin.tmp.$$" \
+            && mv -f "$HOME/.claude/quota-origin.tmp.$$" "$HOME/.claude/quota-origin"; } 2>/dev/null
     fi
 fi
 
@@ -635,11 +675,12 @@ EOF
     # behind and carries its `ts`, which the reader already checks (MAX_AGE) - an admittedly
     # old file beats one that lies.
     if [ "$has_wreset" = true ] && [ "$PK_PUBLISH" != no ] \
-       && [ "${_rl_write:-no}" = yes ] && [ "${_rl_fresh:-no}" = yes ]; then
-        printf 'day_idx=%s\nbalance=%s\nover=%s\nweek_used_pct=%s\nweek_days=%s\nts=%s\n' \
+       && [ "${_rl_write:-no}" = yes ] && [ "${_rl_fresh:-no}" = yes ] \
+       && [ "${_rl_took_lock:-no}" = yes ]; then
+        { printf 'day_idx=%s\nbalance=%s\nover=%s\nweek_used_pct=%s\nweek_days=%s\nts=%s\n' \
             "$day_idx" "${balance//,/.}" "$over" "$week_pct" "${week_days:-7}" "$now" \
-            > "$HOME/.claude/quota-state.tmp" 2>/dev/null \
-            && mv -f "$HOME/.claude/quota-state.tmp" "$HOME/.claude/quota-state" 2>/dev/null
+            > "$HOME/.claude/quota-state.tmp.$$" \
+            && mv -f "$HOME/.claude/quota-state.tmp.$$" "$HOME/.claude/quota-state"; } 2>/dev/null
     fi
 
     week_block="${GRAY}7d"
