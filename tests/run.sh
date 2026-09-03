@@ -9,7 +9,7 @@
 # throwaway home and a throwaway TMPDIR, because this program WRITES while it runs: a
 # check that "only reads" once destroyed a real quota record on the author's machine.
 #
-# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces six of the repaired defects
+# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces seven of the repaired defects
 # into a copy of the sources, one at a time, and asserts the suite goes RED for each. A
 # suite that has never been seen to fail certifies nothing.
 
@@ -30,7 +30,7 @@ esac
 trap 'rm -rf "$ROOT"' EXIT
 
 # ------------------------------------------------------------------- --prove
-# A suite nobody has seen fail certifies nothing. This re-introduces six of the defects
+# A suite nobody has seen fail certifies nothing. This re-introduces seven of the defects
 # that were actually repaired, one at a time, into a COPY of the sources, and demands that
 # the suite go red for each. If one of them comes back green, that case is decoration.
 if [ "${1:-}" = "--prove" ]; then
@@ -64,7 +64,7 @@ PY
         fi
     }
 
-    printf 'Putting six repaired defects back, one at a time:\n\n'
+    printf 'Putting seven repaired defects back, one at a time:\n\n'
 
     prove_one "the renewal countdown prints nothing" statusline.sh \
         "    print((target - today).days, int(until.timestamp()), hhmm.strftime('%H:%M') if hhmm else '-')" \
@@ -89,6 +89,10 @@ PY
     prove_one "publishing off no longer stops the shared file" statusline.sh \
         "    if [ \"\$has_wreset\" = true ] && [ \"\$PK_PUBLISH\" != no ] \\" \
         "    if [ \"\$has_wreset\" = true ] \\"
+
+    prove_one "the restart is judged only against the published file" statusline.sh \
+        "        elif [ -n \"\$_qo_seen\" ]; then" \
+        "        elif [ -n \"\" ]; then"
 
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
@@ -335,6 +339,28 @@ h=$(new_home); conf "$h" "$(printf 'PUBLISH_STATE=yes\n')"
 render "$h" "$(payload 22.5 41.2)"
 [ -e "$h/.claude/rate-limits.json" ] && ok || bad "U   publishing on: rate-limits.json" "present" "absent"
 [ -e "$h/.claude/quota-state" ]     && ok || bad "U   publishing on: quota-state"     "present" "absent"
+
+# ================================================== 5b. the mid-window restart
+section "A counter that restarts in the middle of its window"
+
+# The headline feature, exercised through the front door: two renders sharing one weekly
+# deadline, with the counter dropping between them. It has to hold WITH PUBLISHING OFF,
+# which is the default answer to the install question - the drop used to be judged only
+# against `rate-limits.json`, a file that publishing off never writes, so the whole thing
+# was quietly inert for anyone who took the default. The five-hour stamps deliberately
+# differ by a minute: inside one five-hour window a drop loses the freshness comparison,
+# which is a separate limitation and not what this case is about.
+NOW=$(date +%s)
+for pub in no yes; do
+    h=$(new_home); conf "$h" "PUBLISH_STATE=$pub"
+    WREset=$((NOW + 345600))
+    render "$h" "$(payload 10 40 $((NOW + 7200)) "$WREset")"
+    has "W1-$pub  a full window reads as seven days"        "d4/7" "$L2"
+    render "$h" "$(payload 10 2 $((NOW + 7260)) "$WREset")"
+    has "W2-$pub  the restart shortens the denominator"     "d1/4" "$L2"
+    has "W3-$pub  and the daily share shrinks with it"      "today still 23.0%" "$L2"
+    quiet "W4-$pub"
+done
 
 # =============================================================== 6. installer
 section "The installer, executed rather than read"
