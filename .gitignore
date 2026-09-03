@@ -6,3 +6,7 @@ rate-limits.json
 rate-limits.d/
 context-usage/
 *.bak-*
+
+# Build noise
+__pycache__/
+*.pyc
