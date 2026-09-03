@@ -212,17 +212,27 @@ So `——pacekeeper-->` writes what it learns to disk, atomically:
 | `~/.claude/context-usage/<session>.json` | context fill per session |
 
 **This is off unless you ask for it.** The installer asks, and the default answer is no: those
-files carry paths, session identifiers and usage figures, and nothing writes any of them until you
-say yes. The config file and the shared quota file are written with `0600`.
+files carry paths, session identifiers and usage figures, and none of them is written until you
+say yes.
+
+**One file is written either way**, and it is fairer to name it than to let you find it:
+`quota-origin` holds four numbers — when the weekly counter last restarted, which window that
+was, the percentage seen then, and a timestamp. No paths, no session ids. It is not published
+data, it is the only way the line can tell a shortened window from a full one, and without it the
+headline feature silently reverts to assuming seven days.
 
 Everything is created private to you (`0600`, inside `0700` directories).
 
-**On the word "atomic", precisely.** Every file other tools read is written to a per-process
-temporary name and renamed into place, so a reader never sees half of one. The shared file's whole
-read-compare-write is taken under a lock (an atomic `mkdir`), so two status lines redrawing in the
-same instant cannot both decide they are the fresher one. A lock left behind by a killed process is
-taken over after a minute rather than waited for: this guards a status line, and one that stalls is
-worse than one that occasionally skips a sample.
+**On the word "atomic", precisely.** Every file another tool can read — shared, per-session, all
+of them — is written to a per-process temporary name and renamed into place, so a reader never
+sees half of one. The shared file's whole read-compare-write is taken under a lock (an atomic
+`mkdir`), so two status lines redrawing in the same instant cannot both decide they are the fresher
+one.
+
+The lock carries a token and a holder releases only its own. A lock left behind by a killed process
+is taken over after a minute rather than waited for — a status line that stalls is worse than one
+that skips a sample — and the token is what stops that takeover from eating itself, where the
+process being taken over wakes up and deletes its successor's lock.
 
 ### Reading those numbers without getting them wrong
 

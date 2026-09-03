@@ -523,7 +523,14 @@ done
 # The runtime paths too. They do not exist yet in the normal case, and recording that is
 # the only way uninstall can tell "we made this" from "this was already here".
 for target in $ARTIFACT_FILES; do
-    if [ -e "$CLAUDE_DIR/$target" ]; then
+    if [ -f "$CLAUDE_DIR/$target" ]; then
+        # A pre-existing runtime file is not only protected from deletion: it gets a real
+        # backup, because the status line will start writing over it within seconds.
+        # Recording it without one protected it from the uninstall and left it to be
+        # overwritten in the meantime, which is half a promise.
+        backup_file "$target"
+        printf '%s\texisted\t%s\n' "$target" "$BACKUP_MADE" >> "$manifest_tmp"
+    elif [ -e "$CLAUDE_DIR/$target" ]; then
         printf '%s\texisted\t\n' "$target" >> "$manifest_tmp"
     else
         printf '%s\tabsent\t\n' "$target" >> "$manifest_tmp"

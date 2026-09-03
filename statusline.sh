@@ -411,7 +411,8 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     if [ "$PK_PUBLISH" != no ] && [ -n "$_rl_sid" ]; then
         _rl_dir="$HOME/.claude/rate-limits.d"
         [ -d "$_rl_dir" ] || mkdir -p "$_rl_dir" 2>/dev/null
-        { printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json"; } 2>/dev/null
+        { printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json.$$" \
+            && mv -f "$_rl_dir/$_rl_sid.json.$$" "$_rl_dir/$_rl_sid.json"; } 2>/dev/null
     fi
 
     # 2. the shared file, the one tools read: only if we are the freshest.
@@ -427,17 +428,41 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # A lock left behind by a killed process would block every future write, so one older
     # than a minute is taken over rather than waited for: this guards a status line, and a
     # status line that stalls is worse than one that occasionally loses a sample.
+    # THE LOCK CARRIES A TOKEN, and a holder releases only its own. Without that, the
+    # takeover rule eats itself: a process paused for a minute has its lock removed, a
+    # second process takes it, and when the first wakes up its unconditional release
+    # deletes the SECOND one's lock - leaving the file unprotected precisely during the
+    # window the lock existed for. The token makes release conditional on still owning it.
     _rl_lock="$HOME/.claude/.rate-limits.lock"
+    _rl_token="$$-$_rl_now"
     _rl_locked=no
     if mkdir "$_rl_lock" 2>/dev/null; then
+        { printf '%s\n' "$_rl_token" > "$_rl_lock/owner"; } 2>/dev/null
         _rl_locked=yes
     elif [ -d "$_rl_lock" ]; then
+        # A lock left behind by a killed process must not block a status line forever.
+        # Sixty seconds is far longer than any redraw and far shorter than a session.
         _rl_lock_age=$(( _rl_now - $(pk_mtime "$_rl_lock") ))
         if [ "$_rl_lock_age" -gt 60 ] 2>/dev/null; then
+            rm -f "$_rl_lock/owner" 2>/dev/null || true
             rmdir "$_rl_lock" 2>/dev/null || true
-            if mkdir "$_rl_lock" 2>/dev/null; then _rl_locked=yes; fi
+            if mkdir "$_rl_lock" 2>/dev/null; then
+                { printf '%s\n' "$_rl_token" > "$_rl_lock/owner"; } 2>/dev/null
+                _rl_locked=yes
+            fi
         fi
     fi
+    # Releases the lock, but only if it is still ours.
+    pk_unlock() {
+        local held=""
+        [ "$_rl_locked" = yes ] || return 0
+        [ -r "$_rl_lock/owner" ] && read -r held < "$_rl_lock/owner" 2>/dev/null
+        if [ "$held" = "$_rl_token" ]; then
+            rm -f "$_rl_lock/owner" 2>/dev/null || true
+            rmdir "$_rl_lock" 2>/dev/null || true
+        fi
+        _rl_locked=no
+    }
     _rl_write=yes
     _rl_old=""; _rl_o7p=""; _rl_o7r=""; _rl_o5=""
     _rl_fresh=no          # la nostra fotografia e' almeno fresca quanto quella su disco?
@@ -484,10 +509,7 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # Released as soon as the shared file is settled. Everything after this point either
     # writes a per-session file or a file derived from what was just decided.
     _rl_took_lock=$_rl_locked
-    if [ "$_rl_locked" = yes ]; then
-        rmdir "$_rl_lock" 2>/dev/null || true
-        _rl_locked=no
-    fi
+    pk_unlock
 
     # --- WHERE THE WEEKLY COUNTER REALLY STARTED ---
     # The 7-day window and the counter that fills it can have two DIFFERENT origins.
@@ -502,7 +524,10 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # The drop is only judged when our snapshot has already won the freshness comparison above
     # (`_rl_write=yes`): a stale sample from another session sees lower numbers and would
     # trigger a restart that never happened.
-    if [ "$_rl_write" = yes ] && [ "$_rl_fresh" = yes ] \
+    # Also only under the lock. A process that lost the comparison was still writing this
+    # derived file, and a snapshot that was never good enough to publish is not good
+    # enough to change what the next window is measured against.
+    if [ "$_rl_write" = yes ] && [ "$_rl_fresh" = yes ] && [ "$_rl_locked" = yes ] \
        && [ -n "$week_reset" ] && [ "$week_reset" != "null" ] && [ -n "$_wp_int" ]; then
         _qo_origin=""; _qo_line=""
         [ -f "$HOME/.claude/quota-origin" ] &&
@@ -543,7 +568,8 @@ if [ "$PK_PUBLISH" != no ] && [ "$PK_CAN_WRITE" = yes ] && [ -n "$transcript_pat
     _cu_sid=${transcript_path##*/}; _cu_sid=${_cu_sid%.jsonl}
     { printf '{"stamp":%s,"session_id":"%s","used_pct":%s,"transcript":"%s"}\n' \
         "$(date +%s)" "$(pk_json_escape "$_cu_sid")" "$ctx_pct" "$(pk_json_escape "$transcript_path")" \
-        > "$_cu_dir/$_cu_sid.json"; } 2>/dev/null
+        > "$_cu_dir/$_cu_sid.json.$$" \
+        && mv -f "$_cu_dir/$_cu_sid.json.$$" "$_cu_dir/$_cu_sid.json"; } 2>/dev/null
 fi
 
 # The reset times (Unix timestamps) come from the single read at the top of the script.
