@@ -127,16 +127,26 @@ yesno() {
 # overwrite that instead — outside the directory the user agreed to let us touch.
 refuse_symlinks() {
     local target
-    # The runtime paths are in this list too. They were not, and a symlink among them was
-    # dereferenced on backup and replaced by a regular file on restore - so the link the
-    # user had put there was quietly destroyed. A dangling one was even recorded as
-    # "absent", because both -f and -e are false for it, and then deleted on uninstall.
-    for target in $TOUCHED $ARTIFACT_FILES $ARTIFACT_DIRS; do
+    # Two different rules, because two different things are being protected.
+    # FILES: a symlink is refused, and so is anything that is not a regular file.
+    # DIRECTORIES: only the symlink is refused. rate-limits.d and context-usage ARE
+    # directories by design, so demanding a regular file there refused to install on
+    # every machine that had ever run this status line - including the author's, which
+    # is how it was found: by running the installer for real rather than reviewing it.
+    for target in $TOUCHED $ARTIFACT_FILES; do
         if [ -L "$CLAUDE_DIR/$target" ]; then
             die "$CLAUDE_DIR/$target is a symlink. Refusing to write through it — resolve it by hand first."
         fi
         if [ -e "$CLAUDE_DIR/$target" ] && [ ! -f "$CLAUDE_DIR/$target" ]; then
             die "$CLAUDE_DIR/$target is not a regular file. Refusing to touch it."
+        fi
+    done
+    for target in $ARTIFACT_DIRS; do
+        if [ -L "$CLAUDE_DIR/$target" ]; then
+            die "$CLAUDE_DIR/$target is a symlink. Refusing to write through it — resolve it by hand first."
+        fi
+        if [ -e "$CLAUDE_DIR/$target" ] && [ ! -d "$CLAUDE_DIR/$target" ]; then
+            die "$CLAUDE_DIR/$target exists but is not a directory. Refusing to touch it."
         fi
     done
 }

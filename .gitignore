@@ -10,3 +10,6 @@ context-usage/
 # Build noise
 __pycache__/
 *.pyc
+
+# macOS
+.DS_Store
