@@ -36,14 +36,31 @@ command -v "$READER" >/dev/null 2>&1 || [ -x "$READER" ] || {
     exit 2
 }
 
-reading=$("$READER" --json) || { echo "STOP  $reading"; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "STOP  jq is required by this example"; exit 2; }
 
-# Pulled out with a plain shell parse so this example needs nothing but bash.
-get() { printf '%s' "$reading" | sed -n "s/.*\"$1\":\([^,}]*\).*/\1/p"; }
-day=$(get day)
-days=$(get days)
-balance=$(get balance)
-used=$(get used_pct)
+# The reader's exit status is the verdict; its output is only the detail. A guard that
+# reads the numbers and ignores the status will happily act on `{"ok":false}`.
+if ! reading=$("$READER" --json); then
+    echo "STOP  $(printf '%s' "$reading" | jq -r '.reason // "no reading"' 2>/dev/null || echo 'no reading')"
+    exit 2
+fi
+
+# Parsed with jq, not with sed. A sed extraction silently returns an empty string when
+# the shape is not what it expected, and an empty string then becomes a zero in awk and
+# an "integer expression expected" error in test - which is to say, the guard makes a
+# spending decision out of a parse failure. It must fail CLOSED instead.
+if ! printf '%s' "$reading" | jq -e '
+        .ok == true
+        and (.day   | type) == "number"
+        and (.days  | type) == "number"
+        and (.balance | type) == "number"' >/dev/null 2>&1; then
+    echo "STOP  the reader returned something this guard cannot trust"
+    exit 2
+fi
+day=$(printf '%s' "$reading"     | jq -r '.day')
+days=$(printf '%s' "$reading"    | jq -r '.days')
+balance=$(printf '%s' "$reading" | jq -r '.balance')
+used=$(printf '%s' "$reading"    | jq -r '.used_pct // 0')
 
 # THE LAST DAY IS `days`, NOT 7. This is the whole reason the reader reports `days`:
 # when the weekly counter restarts mid-window, the last day arrives early. A guard

@@ -48,6 +48,17 @@ EOF
 
 [ -z "$cwd" ] && cwd="$PWD"
 [ -z "$ctx_pct" ] && ctx_pct=0
+
+# THE JSON IS INPUT, NOT A PROMISE. These values end up inside `$(( ))` and inside awk.
+# A field that is not a plain number turns arithmetic into an error printed on the line:
+# `"resets_at": "1/0"` produces a division-by-zero message. Anything that is not a bare
+# integer, or a bare decimal for the percentages, is dropped - and a dropped field simply
+# hides its block, which is the behaviour every other failure here already has.
+case "$five_reset" in ''|*[!0-9]*) five_reset="" ;; esac
+case "$week_reset" in ''|*[!0-9]*) week_reset="" ;; esac
+case "$ctx_pct"    in ''|*[!0-9]*) ctx_pct=0 ;; esac
+case "$five_pct"   in ''|*[!0-9.]*) five_pct="" ;; esac
+case "$week_pct"   in ''|*[!0-9.]*) week_pct="" ;; esac
 dir=${cwd##*/}
 
 # Session name from the transcript
@@ -199,13 +210,11 @@ if ! pk_off git && [ "$git_cached" = false ] && git -C "$cwd" rev-parse --git-di
         unpulled=" ${RED}↓$behind${RESET}"
     fi
 
-    # Icon: GitHub when origin points at github.com, plain git otherwise
-    remote_url=$(git -C "$cwd" remote get-url origin 2>/dev/null)
-    if echo "$remote_url" | grep -q "github.com"; then
-        repo_icon=""
-    else
-        repo_icon=""
-    fi
+    # There used to be a branch here choosing a different icon for GitHub remotes. Both
+    # arms assigned the SAME codepoint (U+F09B), so it never distinguished anything -
+    # dead code that the README then described as a feature. Removed 2026-09-03 rather
+    # than guessing a second glyph nobody has seen rendered.
+    repo_icon=""
     branch_icon=""
 
     git_info=" ${repo_icon} ${branch_icon} ${branch_color}${branch}${changes}${RESET}${unpushed}${unpulled}"
@@ -304,7 +313,28 @@ fi
 #   which only moves when a session actually receives a new answer. Within the same window the
 #   HIGHER consumption wins, because inside a window the quota can only go up.
 # The per-session file is ALWAYS written, so a conflict stays diagnosable after the fact.
-if [ "$is_subscriber" = true ]; then
+#
+# WHAT THIS RULE CANNOT DO, said plainly, because a reader will otherwise assume more.
+# The payload carries no observation timestamp and no sequence number, so two snapshots
+# that share a five-hour deadline cannot be ordered at all. Inside that one window the
+# rule assumes consumption only rises - true except immediately after a mid-window
+# counter reset, where the newer snapshot is the LOWER one and loses. That case is not
+# solvable from this data. It is why the published file carries `ts`, and why every
+# reader is expected to reject a reading older than its own tolerance rather than trust
+# the arbitration to have been right.
+# Everything below writes into ~/.claude. If that directory is missing or not writable -
+# an unusable HOME, a full disk, a read-only mount - a redirection towards it is reported
+# by the SHELL ITSELF, before the command's own `2>/dev/null` can suppress anything, and
+# four "Not a directory" lines end up printed inside the status line. Measured 2026-09-03
+# by running with HOME=/dev/null. A status line that prints errors is a status line that
+# gets uninstalled, so writability is established once, here, and nothing is attempted
+# when it fails.
+PK_CAN_WRITE=no
+if [ -d "$HOME/.claude" ] && [ -w "$HOME/.claude" ]; then
+    PK_CAN_WRITE=yes
+fi
+
+if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     _rl_now=$(date +%s)
     _rl_sid=""
     if [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ]; then
@@ -313,8 +343,12 @@ if [ "$is_subscriber" = true ]; then
     _rl_payload=$(printf '{"stamp":%s,"five_hour_used_pct":"%s","seven_day_used_pct":"%s","five_hour_resets_at":"%s","seven_day_resets_at":"%s","session_id":"%s"}' \
         "$_rl_now" "$five_pct" "$week_pct" "$five_reset" "$week_reset" "$_rl_sid")
 
-    # 1. the per-session file: always, unconditionally. Nobody competes for it.
-    if [ -n "$_rl_sid" ]; then
+    # 1. the per-session file: unconditional among the writers, but still gated by the
+    # user's answer. Everything under this heading is DATA PUBLISHED FOR OTHER TOOLS -
+    # paths, session ids and usage figures - and it is off unless somebody asked for it.
+    # The first version gated only `quota-state`, so answering "no" still left these on
+    # disk; the README even claimed nothing was written. Measured 2026-09-03.
+    if [ "$PK_PUBLISH" != no ] && [ -n "$_rl_sid" ]; then
         _rl_dir="$HOME/.claude/rate-limits.d"
         [ -d "$_rl_dir" ] || mkdir -p "$_rl_dir" 2>/dev/null
         printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json" 2>/dev/null
@@ -340,8 +374,14 @@ if [ "$is_subscriber" = true ]; then
             # fails, the error is suppressed, and the "no" branch was never taken -> the stale
             # sample won. Here the direction is explicit: you win by proving you are fresh, not
             # by failing the comparison.
-            if ! [ "$five_reset" -ge "$_rl_o5" ] 2>/dev/null; then
-                _rl_write=no                       # campo assente o finestra precedente
+            # A snapshot from an OLDER WEEKLY WINDOW must never win, whatever its
+            # five-hour deadline says. This was not checked at all, and it is a real
+            # hole: the weekly reset and the five-hour reset move independently.
+            if [ -n "$_rl_o7r" ] && [ -n "$week_reset" ] \
+               && [ "$week_reset" -lt "$_rl_o7r" ] 2>/dev/null; then
+                _rl_write=no
+            elif ! [ "$five_reset" -ge "$_rl_o5" ] 2>/dev/null; then
+                _rl_write=no                       # field missing, or an earlier window
             elif [ "$five_reset" -eq "$_rl_o5" ] 2>/dev/null \
                  && [ "$_wp_int" -lt "$_rl_o7p" ] 2>/dev/null; then
                 _rl_write=no                       # stessa finestra, ma qualcuno ha visto consumare di piu'
@@ -354,7 +394,10 @@ if [ "$is_subscriber" = true ]; then
     else
         _rl_fresh=yes                              # nessun aggregato: siamo i primi
     fi
-    [ "$_rl_write" = yes ] && printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json" 2>/dev/null
+    if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ]; then
+        printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json" 2>/dev/null
+        chmod 600 "$HOME/.claude/rate-limits.json" 2>/dev/null || true
+    fi
 
     # --- WHERE THE WEEKLY COUNTER REALLY STARTED ---
     # The 7-day window and the counter that fills it can have two DIFFERENT origins.
@@ -402,7 +445,8 @@ fi
 # transcript filename.
 # We write ONLY when the data is really there: a file with 0 in it would be read as "empty
 # context" rather than "I do not know", and that is exactly the wrong way round to be wrong.
-if [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ] && [ "$ctx_pct" -gt 0 ] 2>/dev/null; then
+if [ "$PK_PUBLISH" != no ] && [ "$PK_CAN_WRITE" = yes ] && [ -n "$transcript_path" ] \
+   && [ "$transcript_path" != "null" ] && [ "$ctx_pct" -gt 0 ] 2>/dev/null; then
     _cu_dir="$HOME/.claude/context-usage"
     [ -d "$_cu_dir" ] || mkdir -p "$_cu_dir" 2>/dev/null
     _cu_sid=${transcript_path##*/}; _cu_sid=${_cu_sid%.jsonl}
@@ -510,9 +554,13 @@ $(LC_ALL=C awk -v p="$week_pct" -v s="$week_rem" -v span="$week_span" -v dsep="$
     G = int(g); if (g > G) G++;           # giorni che il 100% deve coprire, per eccesso
     if (G < 1) G = 1; if (G > 7) G = 7;
     d = s / 86400;
-    n = int(d); if (d > n) n++;           # giorni interi mancanti al reset, arrotondati per eccesso
+    n = int(d); if (d > n) n++;           # whole days left before the reset, rounded up
+    # AT THE EXACT INSTANT OF THE RESET s is 0, so n is 0 and `G - n + 1` produced day
+    # 8 of 7 - a number that cannot exist, and that the spend guard reads. A window with
+    # no time left in it is the LAST day, not one past it. Measured 2026-09-03.
+    if (n < 1) n = 1;
     if (n > G) n = G;
-    idx = G - n + 1; if (idx < 1) idx = 1;
+    idx = G - n + 1; if (idx < 1) idx = 1; if (idx > G) idx = G;
     after = n - 1; if (after < 0) after = 0;   # giorni pieni dopo oggi
     bal = (100 - (100/G) * after) - p;
     txt = sprintf("%.1f", (bal < 0 ? -bal : bal)); sub(/\./, dsep, txt);
@@ -866,7 +914,12 @@ try:
                 msg = d.get('message', {})
                 model = msg.get('model', '')
                 usage = msg.get('usage', {})
-                p = next((v for k, v in PRICING.items() if k in model), DEFAULT)
+                # An unknown model used to be priced as Sonnet, which understates a
+                # more expensive one by multiples. A cost that is silently wrong is
+                # worse than no cost at all, so an unrecognised model abandons the sum.
+                p = next((v for k, v in PRICING.items() if k in model), None)
+                if p is None:
+                    raise ValueError('unknown model')
                 total += (
                     usage.get('input_tokens', 0) * p['in'] +
                     usage.get('output_tokens', 0) * p['out'] +
@@ -1213,7 +1266,10 @@ if ! pk_off cache && [ -n "$transcript_path" ] && [ "$transcript_path" != "null"
    && [ -f "$HOME/.claude/statusline-cache.py" ]; then
     _ch_sid=${transcript_path##*/}; _ch_sid=${_ch_sid%.jsonl}
     _ch_cache="${cache_dir}/cachettl-${_ch_sid}"
-    _ch_mtime=$(stat -f %m "$transcript_path" 2>/dev/null)
+    # BSD and GNU stat do not share a syntax, and `stat -f` on GNU reports FILESYSTEM
+    # data rather than a timestamp - so on Linux this quietly fed a mount path into
+    # arithmetic instead of an epoch. Try one, fall back to the other.
+    _ch_mtime=$(stat -f %m "$transcript_path" 2>/dev/null || stat -c %Y "$transcript_path" 2>/dev/null)
     _ch_om=""; _ch_exp=""; _ch_ttl=""
     if [ -f "$_ch_cache" ]; then
         IFS=' ' read -r _ch_om _ch_exp _ch_ttl < "$_ch_cache" 2>/dev/null

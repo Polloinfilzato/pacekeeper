@@ -26,17 +26,30 @@ goes red, you are borrowing from tomorrow.
 There are good ones already, and most of them are prettier. This one exists because it survives
 the four situations where a plain percentage quietly lies to you.
 
-### 1. It measures your pace, not your total
+### 1. It reports your pace, not your total
 
 The daily balance (`today still 8.1%` / `today over by 3.2%`) divides what is left by the days
 that are actually left, and compares it to what you have already spent. It answers *"have I been
 working too much or too little so far?"* — not *"how hard could I still push?"*
 
+**It is a heuristic, and it is worth being honest about what kind.** It applies one policy — spend
+the window evenly across the days it has left — to one number. Anthropic does not publish a daily
+allowance, so this is not a measurement of what you are permitted to spend; it is a pace you have
+chosen to hold yourself to, made visible. It knows nothing about the five-hour cap running
+alongside it, about how much a given piece of work is worth doing, or about anything happening
+server-side. Read it as a speedometer, never as a permit.
+
 ### 2. It survives a counter reset in the middle of a window
 
-Anthropic sometimes zeroes the weekly counter without moving the weekly deadline — at a plan
-change, a billing renewal, or a goodwill reset when a new model ships. A naive display then shows
-`0% used` and lets you spend as if you had seven days, when you may have two.
+The weekly counter sometimes drops to zero without the weekly deadline moving. A naive display
+then shows `0% used` and lets you spend as if you had seven days, when you may have two.
+
+*These are observations, not documented behaviour.* Measured on one account on 2026-09-01 and
+2026-09-03, on Claude Code 2.1.259: once when a new model shipped, once at a billing renewal that
+coincided with a plan change. Anthropic documents none of this, the two causes were not separated,
+and it may not generalise. The code treats a drop of ten points or more as a restart, which is a
+guess about a cause from an effect — and a deliberately conservative one, since believing in a
+restart that did not happen shortens the window rather than lengthening it.
 
 `——pacekeeper-->` notices the restart, remembers when it happened, and says so:
 
@@ -58,9 +71,15 @@ Claude Code hands the usage numbers to the status line process of *each* session
 open windows means ten processes writing the same shared file — and a window that has been idle
 for two days keeps rewriting its stale snapshot over the live one, with a fresh timestamp on it.
 
-The failure is silent and it always errs the permissive way: the brake reads a low number and
-lets you through. `——pacekeeper-->` ranks snapshots by the only field that cannot be faked by an
-idle writer, and the stale one loses.
+The failure is silent and it errs the permissive way: the brake reads a low number and lets you
+through. `——pacekeeper-->` ranks snapshots by the fields an idle writer cannot fake — the five-hour
+deadline and the weekly one — and refuses the write when it cannot prove it is the fresher one.
+
+**What that cannot do, stated plainly.** The payload carries no observation timestamp, so two
+snapshots sharing a five-hour deadline cannot be ordered at all; inside that window the rule
+assumes consumption only rises, which is true except in the minutes after a mid-window counter
+reset. This is a mitigation, not a proof. It is exactly why the published file carries `ts` and why
+`pacekeeper-quota` refuses a reading older than five minutes instead of trusting the arbitration.
 
 ### 4. It reads the cache TTL instead of assuming it
 
@@ -86,7 +105,7 @@ never render at all.
 |---|---|---|
 | **Folder** | `pacekeeper` | always |
 | **Git** | ` main*+ ↑2 ↓1` | inside a git repository |
-| **Context** | `██████░░░░ 62%` | always — green, then orange, then red as the window fills |
+| **Context** | `██████░░░░ 62%` | once the conversation has a measurable size |
 | **Cache** | `cache ⬤  47m` / `cache ◌` | when the transcript is readable |
 | **Plan register** | `⛭ 2/3 · 4/9` | when a long-running plan file exists |
 | **Model** | `[Opus 5]` | always |
@@ -95,8 +114,9 @@ never render at all.
 
 **Git.** `*` means tracked changes, `+` means untracked files, `↑N` commits you have not pushed,
 `↓N` commits you have not pulled. The branch is green when the tree is clean and orange when it
-is not. Uses Nerd Font glyphs for the repository and branch icons, and tells GitHub remotes apart
-from the rest. Cached for a few seconds, because `git status` on a large repository is not free.
+is not. Uses Nerd Font glyphs, so without one of those fonts you will see two placeholder boxes
+where the icons are. Cached for a few seconds, because `git status` on a large repository is not
+free — which means it can be a few seconds behind reality.
 
 **Context.** A ten-block bar plus the percentage. This is the one number people mistake for
 progress: it is how full *this conversation* is, and it has nothing to do with how much
@@ -109,13 +129,16 @@ working it stays green on its own — every read refreshes the timer for free �
 *resume-or-wait* signal, not a stopwatch on your thinking.
 
 **Plan register.** For long jobs whose real memory is a `PLAN.md` (or `PIANO.md`) file rather
-than the conversation: pieces finished over pieces total, then tasks finished over tasks total
-inside the piece you are on. It reads both markdown table rows and `- [x]` checklists, and it
+than the conversation. `2/3 · 4/9` reads: **4 of 9 tasks done across the whole plan**, and you are
+in piece 3, where 2 of its tasks are done. The total comes first because it is the number people
+say out loud. It reads both markdown table rows and `- [x]` checklists, and it
 fades out ten minutes after the plan is complete instead of sitting there forever.
 
 **Session cost.** A theoretical pay-per-use figure summed from the transcript at list API prices.
-It is deliberately **hidden for Claude.ai subscribers**, because for them it does not correspond
-to any money that changes hands and would be actively misleading.
+It is deliberately **hidden for Claude.ai subscribers**, because for them it does not correspond to
+any money that changes hands and would be actively misleading. It also disappears when the
+transcript contains a model whose price it does not know: a hard-coded table goes stale every time
+a model ships, and a cost that is quietly wrong is worse than no cost at all.
 
 ### Line 2 — this account
 
@@ -177,7 +200,13 @@ So `——pacekeeper-->` writes what it learns to disk, atomically:
 | `~/.claude/rate-limits.d/<session>.json` | one file per session, so a conflict stays diagnosable |
 | `~/.claude/context-usage/<session>.json` | context fill per session |
 
-This is opt-out at install time if you would rather it wrote nothing.
+**This is off unless you ask for it.** The installer asks, and the default answer is no: those
+files carry paths, session identifiers and usage figures, and nothing writes any of them until you
+say yes. The config file and the shared quota file are written with `0600`.
+
+Writes that replace a whole file (`quota-state`, `quota-origin`) go through a temporary file and a
+rename, so a reader never sees half of one. The per-session files are written in place, which is
+safe because only their own session writes them.
 
 ### Reading those numbers without getting them wrong
 
@@ -221,6 +250,17 @@ cd pacekeeper
 ./install.sh
 ```
 
+Or, without cloning — note the **version tag**, not a branch, so what you install is something
+that was actually tried rather than whatever was pushed a minute ago:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.0.0/install.sh | bash
+```
+
+The questions still work through a pipe: they are read from your terminal, not from standard
+input. But cloning is listed first on purpose — this is a script that edits your Claude Code
+configuration, and being able to read it before running it should not cost you anything.
+
 The installer asks four short questions, patches `~/.claude/settings.json`, and puts four files
 into `~/.claude`: the status line, its two helpers, and `pacekeeper-quota`.
 
@@ -230,25 +270,36 @@ into `~/.claude`: the status line, its two helpers, and `pacekeeper-quota`.
 ./install.sh --restore    # list every backup with its date and pick one
 ```
 
-**Nothing is ever overwritten without a backup**, named `<file>.pacekeeper-<date>-<time>.bak` next
-to the original, and a backup is never overwritten either — not even by another backup taken in
-the same second. If you already have a status line, it says so, shows you what it is, and asks
-before replacing it. `--uninstall` restores the *oldest* backup, because "uninstall" means the
-machine as it was before this ever touched it; `--restore` is there for when you want a particular
-one. Undoing is itself undoable: whatever was in place a moment ago gets backed up first.
+**Nothing is overwritten without a backup**, named `<file>.pacekeeper-<date>-<time>.bak` next to
+the original, and a backup is never overwritten either — not even by another backup taken in the
+same second. If you already have a status line, it says so, shows you what it is, and asks before
+replacing it. A symlink in place of any file it would touch stops the install rather than being
+written through.
+
+Each install also writes a **manifest** under `~/.claude/.pacekeeper/`, recording which files
+existed beforehand. That is what makes uninstall honest: a backup file can say *what a file used to
+contain*, but only the manifest can say *this file did not exist at all* — so `--uninstall` puts
+back what was yours and removes what was ours, including the runtime state written since. Undoing
+is itself undoable: whatever was in place a moment ago is backed up first.
 
 ### Requirements
 
 | | |
 |---|---|
-| **Claude Code** | any recent version |
+| **Claude Code** | built and tested against 2.1.259 |
 | **bash** | 3.2+ — the bash macOS already ships is enough |
 | **jq**, **python3** | required |
 | **git** | optional; the git block hides without it |
 | **A Nerd Font** | optional; only the git icons need it |
 
-Tested on macOS. It is POSIX-minded shell with no other dependencies, so Linux should be fine —
-reports welcome.
+**Tested on macOS only.** The shell is written to be portable and the one BSD-specific call is
+guarded with a GNU fallback, but nobody has run this on Linux yet — so treat Linux as unverified
+rather than supported, and please report what happens.
+
+**It depends on fields Anthropic does not document.** The whole thing is built on the JSON Claude
+Code hands to a status line command, whose shape is not part of any published contract. Every
+block degrades to silence when a field it wants is missing, which is the only guarantee that can
+honestly be offered: an update could take any of these numbers away without warning.
 
 ---
 
@@ -267,9 +318,10 @@ RENEWAL_TIME=15:41     # local time of the charge — optional, but it makes "to
 
 **The date** is on your Claude.ai billing page: *Settings → Billing*. It shows the next renewal.
 
-**The time** is not shown anywhere in the UI. It is the anniversary of the instant your billing
-cycle was born, and the one place it is written down is the **receipt email** from Stripe: the
-timestamp on the receipt *is* the charge time. Search your mail for `Claude` and `receipt`.
+**The time** is not shown anywhere in the UI. On the account this was built against, the timestamp
+on the **receipt email** has matched the charge time on every cycle — so that is where to look:
+search your mail for `Claude` and `receipt`. That is an observation from one account, not a
+documented guarantee; if the countdown flips at the wrong hour, this is the number to correct.
 
 **Or let Claude Code find it for you.** The installer offers this, and you can also just paste
 this into any Claude Code session:
