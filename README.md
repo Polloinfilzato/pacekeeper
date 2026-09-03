@@ -364,6 +364,31 @@ instead of switching over at the exact hour.
 
 ---
 
+## Tests
+
+```sh
+./tests/run.sh            # 87 cases, about ten seconds
+./tests/run.sh --prove    # put six repaired defects back, one at a time, and watch it go red
+```
+
+Every case runs against a throwaway `$HOME` and a throwaway `TMPDIR`. Nothing here ever touches
+the machine it runs on: this program *writes* while it runs, and a check that "only reads" once
+destroyed a real quota record on the author's machine.
+
+The suite covers the renewal countdown in twelve configurations, the `RENEWAL_TIME` grammar in
+eleven (including a corrupt value planted directly in the cache, which is the only route by which
+an unchecked time can still reach shell arithmetic), the percentage grammar in both directions,
+the theoretical cost, what does and does not land on disk under each answer to the install
+question, and the installer itself — installed, re-installed over itself, uninstalled, and asked
+to go back to a specific one of three installs that all happened inside the same second.
+
+**`--prove` is not decoration.** Six defects that were genuinely found and repaired here are put
+back into a copy of the sources, one at a time, and the suite has to fail for each of them. Six
+adversarial review passes read this program and missed five defects between them; every one of the
+five was found the moment somebody *ran* it. Reading is not the filter.
+
+---
+
 ## Design notes
 
 A few rules the code follows, in case you want to change it.
