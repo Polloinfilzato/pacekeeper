@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# pacekeeper-quota — read the quota numbers without getting them wrong.
+#
+# The status line writes ~/.claude/quota-state on every redraw. Reading that file by
+# hand looks trivial and has two traps that do not show themselves until they cost you
+# something. This exists so nobody has to remember them:
+#
+#   1. `week_days` IS NOT ALWAYS 7. Anthropic sometimes zeroes the weekly counter
+#      without moving the weekly deadline — at a plan change, a billing renewal, or a
+#      goodwill reset when a new model ships. The 100% you are holding then has to last
+#      two days, not seven. A reader with 7 hardcoded computes a daily allowance three
+#      times too generous, and errs on the side of letting you spend.
+#
+#   2. `ts` MUST BE COMPARED WITH THE CLOCK. The file can legitimately be old — nothing
+#      writes it while every session is idle. A stale number read as current is the
+#      exact failure this file is here to prevent.
+#
+# Both are handled below. Exit status: 0 the numbers are good, 2 there is nothing
+# trustworthy to report (missing, incomplete, or stale). There is no exit status for
+# "you have spent too much": what counts as too much is a policy, and a policy belongs
+# to you, not to this. See examples/spend-guard.sh for one written out.
+set -u
+
+STATE="${PACEKEEPER_STATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/quota-state}"
+MAX_AGE="${PACEKEEPER_MAX_AGE:-300}"
+FORMAT="text"
+
+for arg in "$@"; do
+    case "$arg" in
+        --json) FORMAT="json" ;;
+        -h|--help)
+            cat <<EOF
+pacekeeper-quota — the quota numbers, already interpreted
+
+  pacekeeper-quota           one human-readable line
+  pacekeeper-quota --json    the same values as JSON
+
+Environment:
+  PACEKEEPER_STATE     path to quota-state (default: ~/.claude/quota-state)
+  PACEKEEPER_MAX_AGE   seconds before the data counts as stale (default: 300)
+
+Exit status: 0 = trustworthy numbers, 2 = nothing trustworthy to report.
+
+Fields:
+  day        which day of the window you are on
+  days       how many days the remaining 100% actually has to cover — NOT always 7
+  used_pct   percentage of the weekly window consumed
+  balance    SIGNED: positive is still spendable today, negative is already borrowed
+  age_s      how old the reading is
+EOF
+            exit 0 ;;
+        *) printf 'unknown option: %s\n' "$arg" >&2; exit 2 ;;
+    esac
+done
+
+fail() {
+    if [ "$FORMAT" = json ]; then
+        printf '{"ok":false,"reason":"%s"}\n' "$1"
+    else
+        printf 'no trustworthy reading: %s\n' "$1"
+    fi
+    exit 2
+}
+
+[ -r "$STATE" ] || fail "$STATE is not readable"
+
+# The file is plain KEY=value written by us, but it is still someone else's file on
+# disk: read it by parsing, never by sourcing it into this shell.
+day_idx=""; balance=""; over=""; week_used_pct=""; week_days=""; ts=""
+while IFS='=' read -r key value; do
+    case "$key" in
+        day_idx)       day_idx=$value ;;
+        balance)       balance=$value ;;
+        over)          over=$value ;;
+        week_used_pct) week_used_pct=$value ;;
+        week_days)     week_days=$value ;;
+        ts)            ts=$value ;;
+    esac
+done < "$STATE"
+
+[ -n "$day_idx" ] && [ -n "$balance" ] && [ -n "$over" ] && [ -n "$ts" ] \
+    || fail "the file is incomplete"
+
+# Trap 1. An older status line did not write this field at all; 7 is the right fallback
+# there, because a window that was never restarted really is seven days long.
+case "$week_days" in
+    ''|*[!0-9]*) week_days=7 ;;
+esac
+[ "$week_days" -ge 1 ] 2>/dev/null && [ "$week_days" -le 7 ] 2>/dev/null || week_days=7
+
+# Trap 2.
+now=$(date +%s)
+age=$(( now - ts ))
+[ "$age" -lt 0 ] && age=0
+if [ "$age" -gt "$MAX_AGE" ]; then
+    fail "the reading is ${age}s old (limit ${MAX_AGE}s) — no status line has run recently"
+fi
+
+# `balance` is stored unsigned with `over` carrying the sign. Handing that pair to a
+# caller invites exactly one bug, so it leaves here already signed.
+if [ "$over" = "1" ]; then
+    signed="-$balance"
+    verdict="over by ${balance}%"
+else
+    signed="$balance"
+    verdict="still ${balance}% today"
+fi
+
+if [ "$FORMAT" = json ]; then
+    printf '{"ok":true,"day":%s,"days":%s,"used_pct":%s,"balance":%s,"over":%s,"age_s":%s}\n' \
+        "$day_idx" "$week_days" "${week_used_pct:-0}" "$signed" \
+        "$( [ "$over" = "1" ] && printf 'true' || printf 'false' )" "$age"
+else
+    printf 'day %s/%s · %s%% of the week used · %s · read %ss ago\n' \
+        "$day_idx" "$week_days" "${week_used_pct:-0}" "$verdict" "$age"
+fi

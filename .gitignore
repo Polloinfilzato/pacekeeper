@@ -1,0 +1,8 @@
+# Personal data — never publish these
+subscription.conf
+quota-state
+quota-origin
+rate-limits.json
+rate-limits.d/
+context-usage/
+*.bak-*
