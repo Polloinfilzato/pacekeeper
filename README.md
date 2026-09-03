@@ -73,13 +73,18 @@ for two days keeps rewriting its stale snapshot over the live one, with a fresh 
 
 The failure is silent and it errs the permissive way: the brake reads a low number and lets you
 through. `——pacekeeper-->` ranks snapshots by the fields an idle writer cannot fake — the five-hour
-deadline and the weekly one — and refuses the write when it cannot prove it is the fresher one.
+deadline and the weekly one — and declines to write when it cannot show it is the fresher one. In
+practice that is what stops a window left open since yesterday from speaking for today.
 
-**What that cannot do, stated plainly.** The payload carries no observation timestamp, so two
-snapshots sharing a five-hour deadline cannot be ordered at all; inside that window the rule
-assumes consumption only rises, which is true except in the minutes after a mid-window counter
-reset. This is a mitigation, not a proof. It is exactly why the published file carries `ts` and why
-`pacekeeper-quota` refuses a reading older than five minutes instead of trusting the arbitration.
+**What it does NOT do, stated plainly, because the difference matters.** The payload carries no
+observation timestamp, so two snapshots sharing a five-hour deadline cannot be ordered at all;
+inside that window the rule assumes consumption only rises, which is true except in the minutes
+after a mid-window counter reset. And the read-compare-write is not locked, so two redraws landing
+together can both decide they are the fresher one.
+
+This is a mitigation, not a guarantee, and it cannot become one without a field the input does not
+contain. It is why the published file carries `ts`, and why `pacekeeper-quota` refuses a reading
+older than five minutes rather than trusting the arbitration to have been right.
 
 ### 4. It reads the cache TTL instead of assuming it
 
@@ -187,6 +192,11 @@ handles the fact that `list` and `status` do not use the same vocabulary for the
 
 ## It is also a sensor, not just a display
 
+> **Treat this part as experimental.** It is useful, it is what the author uses daily, and it has
+> been hardened against every failure found so far — but it is unlocked shell code writing plain
+> files, read by whatever you point at it. Build a report on it; think hard before building
+> something that spends money on it unsupervised.
+
 Claude Code passes the usage numbers to the status line **and nowhere else**. Anything else on
 your machine that wants to know how much quota is left — a nightly agent, a spend guard, a script
 that decides whether to start one more job — has no way to find out.
@@ -204,9 +214,13 @@ So `——pacekeeper-->` writes what it learns to disk, atomically:
 files carry paths, session identifiers and usage figures, and nothing writes any of them until you
 say yes. The config file and the shared quota file are written with `0600`.
 
-Writes that replace a whole file (`quota-state`, `quota-origin`) go through a temporary file and a
-rename, so a reader never sees half of one. The per-session files are written in place, which is
-safe because only their own session writes them.
+Everything is created private to you (`0600`, inside `0700` directories).
+
+**On the word "atomic", precisely.** `quota-state` and `quota-origin` go through a temporary file
+and a rename, so a reader never sees half of one. The shared and per-session files are written in
+place, and there is **no lock**: two status lines redrawing in the same instant are not serialised.
+For the per-session files that is harmless, since only their own session writes them. For the
+shared one it is a real, if narrow, race — see below.
 
 ### Reading those numbers without getting them wrong
 

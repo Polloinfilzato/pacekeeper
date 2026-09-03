@@ -94,7 +94,14 @@ done < "$STATE"
 # doing the job it was written for. A field that is not the shape it claims to be makes
 # the whole reading untrustworthy: there is no partial credit here.
 is_int()  { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
-is_num()  { case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; *) return 0 ;; esac; }
+# A lone "." contains nothing but a dot, so a digits-or-dot test waves it through - and
+# it then reaches the JSON output as `"balance":.`, which is not JSON. The integer part
+# has to be a number in its own right.
+is_num()  {
+    case "$1" in ''|*[!0-9.]*|*.*.*) return 1 ;; esac
+    case "${1%%.*}" in ''|*[!0-9]*) return 1 ;; esac
+    return 0
+}
 
 is_int "$day_idx"                  || fail "day_idx is not a whole number"
 is_int "$ts"                       || fail "ts is not a whole number"
@@ -103,17 +110,31 @@ case "$over" in 0|1) : ;; *)          fail "over is neither 0 nor 1" ;; esac
 [ -z "$week_used_pct" ] || is_num "$week_used_pct" || fail "week_used_pct is not a number"
 is_int "$MAX_AGE"                  || fail "PACEKEEPER_MAX_AGE is not a whole number"
 
-# Trap 1. An older status line did not write this field at all; 7 is the right fallback
-# there, because a window that was never restarted really is seven days long.
-case "$week_days" in
-    ''|*[!0-9]*) week_days=7 ;;
-esac
-[ "$week_days" -ge 1 ] 2>/dev/null && [ "$week_days" -le 7 ] 2>/dev/null || week_days=7
+# Trap 1. ABSENT is fine and means 7: an older status line did not write this field, and
+# a window that was never restarted really is seven days long. PRESENT BUT WRONG is not
+# fine, and quietly turning it into 7 would be the exact failure this program exists to
+# prevent - a made-up denominator is how a guard ends up three times too generous.
+if [ -n "$week_days" ]; then
+    is_int "$week_days" || fail "week_days is not a whole number"
+    { [ "$week_days" -ge 1 ] && [ "$week_days" -le 7 ]; } || fail "week_days is outside 1..7"
+else
+    week_days=7
+fi
+
+# The day has to sit inside the window it claims to be part of. `day 0` and `day 99` both
+# used to come through, and a guard comparing them against the last day then applies the
+# wrong policy, or errors out mid-decision.
+{ [ "$day_idx" -ge 1 ] && [ "$day_idx" -le "$week_days" ]; } \
+    || fail "day_idx $day_idx is outside the window of $week_days day(s)"
 
 # Trap 2.
 now=$(date +%s)
 age=$(( now - ts ))
-[ "$age" -lt 0 ] && age=0
+# A reading from the future is not a fresh reading, it is a broken clock or a bad file.
+# Clamping it to zero used to make it look like the freshest possible data.
+if [ "$age" -lt 0 ]; then
+    fail "the reading is dated in the future ($(( -age ))s ahead)"
+fi
 if [ "$age" -gt "$MAX_AGE" ]; then
     fail "the reading is ${age}s old (limit ${MAX_AGE}s) — no status line has run recently"
 fi

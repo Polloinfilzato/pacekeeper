@@ -49,11 +49,14 @@ fi
 # the shape is not what it expected, and an empty string then becomes a zero in awk and
 # an "integer expression expected" error in test - which is to say, the guard makes a
 # spending decision out of a parse failure. It must fail CLOSED instead.
+# "It is a number" is not enough: day 0, day 99 and day 2.5 are all numbers, and shell
+# `-ge` on any of them either errors out or applies the wrong policy in silence.
 if ! printf '%s' "$reading" | jq -e '
         .ok == true
-        and (.day   | type) == "number"
-        and (.days  | type) == "number"
-        and (.balance | type) == "number"' >/dev/null 2>&1; then
+        and (.day     | type) == "number" and (.day   | floor) == .day and .day  >= 1
+        and (.days    | type) == "number" and (.days  | floor) == .days and .days >= 1
+        and .day <= .days
+        and (.balance | type) == "number" and (.balance | isnan | not)' >/dev/null 2>&1; then
     echo "STOP  the reader returned something this guard cannot trust"
     exit 2
 fi

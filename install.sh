@@ -211,6 +211,30 @@ if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
     manifest="$MANIFEST_DIR/$chosen.manifest"
     [ -r "$manifest" ] || die "$manifest is not readable"
 
+    # THE MANIFEST IS A FILE ON DISK, so it is input, not testimony. Every name in it is
+    # checked against the fixed list this installer knows about, before anything is
+    # touched: a line reading `../victim  absent` would otherwise make the removal loop
+    # delete outside the directory entirely. A manifest that does not validate aborts
+    # the whole operation - a half-understood recovery plan is worse than none.
+    while IFS=$'\t' read -r target state backup; do
+        [ -n "$target" ] || continue
+        known=0
+        for allowed in $TOUCHED $ARTIFACT_FILES $ARTIFACT_DIRS; do
+            [ "$target" = "$allowed" ] && known=1
+        done
+        [ "$known" = 1 ] || die "manifest names an unexpected file ($target) — refusing to act on it"
+        case "$state" in
+            existed|absent) : ;;
+            *) die "manifest has an unknown state ($state) for $target" ;;
+        esac
+        if [ "$state" = existed ]; then
+            case "$backup" in
+                "$target".pacekeeper-*.bak) : ;;
+                *) die "manifest points $target at an unexpected backup name ($backup)" ;;
+            esac
+        fi
+    done < "$manifest"
+
     # ORDER MATTERS. Everything to be put back is read into a scratch directory FIRST,
     # before anything on disk is touched. Writing the safety copies first once let a
     # stamp collision overwrite the backup that was about to be read, and the restore
@@ -247,22 +271,29 @@ if [ "$UNINSTALL" = 1 ] || [ "$RESTORE" = 1 ]; then
 
     # Only on a real uninstall: --restore is a step sideways between installs, and it
     # must not throw away state the user may still be relying on.
+    # AND ONLY WHAT THE MANIFEST SAYS WAS NOT THERE BEFORE. These paths are ours by
+    # convention, not by ownership: deleting one that predated the install would be
+    # taking someone else's file because it happened to share a name.
     if [ "$UNINSTALL" = 1 ]; then
         removed=0
-        for target in $ARTIFACT_FILES; do
-            if [ -f "$CLAUDE_DIR/$target" ]; then
-                rm -f "$CLAUDE_DIR/$target"
-                removed=$((removed + 1))
-            fi
-        done
-        for target in $ARTIFACT_DIRS; do
-            if [ -d "$CLAUDE_DIR/$target" ]; then
-                rm -rf "$CLAUDE_DIR/$target"
-                removed=$((removed + 1))
-            fi
-        done
+        while IFS=$'\t' read -r target state backup; do
+            [ -n "$target" ] || continue
+            [ "$state" = absent ] || continue
+            for a in $ARTIFACT_FILES; do
+                if [ "$target" = "$a" ] && [ -f "$CLAUDE_DIR/$target" ]; then
+                    rm -f "$CLAUDE_DIR/$target"
+                    removed=$((removed + 1))
+                fi
+            done
+            for a in $ARTIFACT_DIRS; do
+                if [ "$target" = "$a" ] && [ -d "$CLAUDE_DIR/$target" ]; then
+                    rm -rf "$CLAUDE_DIR/$target"
+                    removed=$((removed + 1))
+                fi
+            done
+        done < "$manifest"
         if [ "$removed" -gt 0 ]; then
-            say "  $removed runtime state file(s) removed"
+            say "  $removed runtime state path(s) removed"
         fi
     fi
 
@@ -274,6 +305,14 @@ fi
 
 # ------------------------------------------------------------------------ preflight
 step "Checking what is here"
+
+# The command written into settings.json says ~/.claude, and the status line reads and
+# writes $HOME/.claude throughout. Honouring CLAUDE_CONFIG_DIR here while everything
+# downstream ignores it installs into one place and runs from another. Refusing is the
+# honest answer until the whole path is threaded through.
+if [ "$CLAUDE_DIR" != "$HOME/.claude" ]; then
+    die "CLAUDE_CONFIG_DIR is set to $CLAUDE_DIR, and this installs only into ~/.claude. Unset it and re-run."
+fi
 
 [ -d "$CLAUDE_DIR" ] || die "$CLAUDE_DIR does not exist — is Claude Code installed?"
 [ -w "$CLAUDE_DIR" ] || die "$CLAUDE_DIR is not writable"
@@ -432,7 +471,13 @@ step "Installing"
 
 mkdir -p "$MANIFEST_DIR"
 manifest="$MANIFEST_DIR/$STAMP.manifest"
-: > "$manifest"
+# Written beside its final name and moved into place only once complete. A manifest that
+# becomes visible while it is still being filled in is worse than none: an install
+# interrupted halfway leaves a file that LOOKS like a full record, and the next
+# --uninstall restores the handful of lines that made it in.
+manifest_tmp="$MANIFEST_DIR/.$STAMP.$$.partial"
+: > "$manifest_tmp"
+trap 'rm -f "$manifest_tmp"' EXIT INT TERM
 
 # The manifest is written BEFORE anything is copied, and it records the state of every
 # file this run is allowed to touch — including the ones that do not exist yet, which is
@@ -440,11 +485,29 @@ manifest="$MANIFEST_DIR/$STAMP.manifest"
 for target in $TOUCHED; do
     if [ -f "$CLAUDE_DIR/$target" ]; then
         backup_file "$target"
-        printf '%s\texisted\t%s\n' "$target" "$BACKUP_MADE" >> "$manifest"
+        printf '%s\texisted\t%s\n' "$target" "$BACKUP_MADE" >> "$manifest_tmp"
     else
-        printf '%s\tabsent\t\n' "$target" >> "$manifest"
+        printf '%s\tabsent\t\n' "$target" >> "$manifest_tmp"
     fi
 done
+# The runtime paths too. They do not exist yet in the normal case, and recording that is
+# the only way uninstall can tell "we made this" from "this was already here".
+for target in $ARTIFACT_FILES; do
+    if [ -e "$CLAUDE_DIR/$target" ]; then
+        printf '%s\texisted\t\n' "$target" >> "$manifest_tmp"
+    else
+        printf '%s\tabsent\t\n' "$target" >> "$manifest_tmp"
+    fi
+done
+for target in $ARTIFACT_DIRS; do
+    if [ -e "$CLAUDE_DIR/$target" ]; then
+        printf '%s\texisted\t\n' "$target" >> "$manifest_tmp"
+    else
+        printf '%s\tabsent\t\n' "$target" >> "$manifest_tmp"
+    fi
+done
+mv -f "$manifest_tmp" "$manifest" || die "could not write the install manifest"
+trap - EXIT INT TERM
 say "  manifest written to ${manifest##*/}"
 
 for f in $FILES; do

@@ -54,11 +54,22 @@ EOF
 # `"resets_at": "1/0"` produces a division-by-zero message. Anything that is not a bare
 # integer, or a bare decimal for the percentages, is dropped - and a dropped field simply
 # hides its block, which is the behaviour every other failure here already has.
-case "$five_reset" in ''|*[!0-9]*) five_reset="" ;; esac
-case "$week_reset" in ''|*[!0-9]*) week_reset="" ;; esac
-case "$ctx_pct"    in ''|*[!0-9]*) ctx_pct=0 ;; esac
-case "$five_pct"   in ''|*[!0-9.]*) five_pct="" ;; esac
-case "$week_pct"   in ''|*[!0-9.]*) week_pct="" ;; esac
+# `0[0-9]*` is rejected too: shell arithmetic reads a leading zero as octal, so "08"
+# produces "value too great for base" printed on the status line. And a lone "." passes
+# a naive digits-or-dot test while being no number at all.
+pk_int()  { case "$1" in ''|*[!0-9]*|0?*) return 1 ;; *) return 0 ;; esac; }
+pk_pct()  {
+    case "$1" in ''|*[!0-9.]*|*.*.*|.|0?*) return 1 ;; esac
+    case "${1%%.*}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${1%%.*}" -le 100 ] 2>/dev/null || return 1
+    return 0
+}
+pk_int "$five_reset" || five_reset=""
+pk_int "$week_reset" || week_reset=""
+pk_int "$ctx_pct"    || ctx_pct=0
+[ "$ctx_pct" -le 100 ] 2>/dev/null || ctx_pct=100
+pk_pct "$five_pct"   || five_pct=""
+pk_pct "$week_pct"   || week_pct=""
 dir=${cwd##*/}
 
 # Session name from the transcript
@@ -82,6 +93,40 @@ GIT_ORANGE=$'\033[38;2;255;165;0m'
 # The git commands are the slowest part of this script (on a large repository they are
 # worth over 150ms on their own) and the state of a repository does not change from one
 # instant to the next, so the result is cached on file for a few seconds, one per workdir.
+# BSD and GNU `stat` do not share a syntax, and the difference is not a clean failure:
+# GNU `stat -f` SUCCEEDS while reporting filesystem data instead of a timestamp, so a
+# `bsd || gnu` fallback never reaches the fallback and feeds nonsense into arithmetic.
+# The flavour is decided once, by asking for something only GNU accepts.
+# Everything this script creates is private to its owner. Set once, at the top, rather
+# than chmod-ing each file afterwards: a chmod after the write leaves a window in which
+# the file is readable, and one forgotten call is enough to undo the whole intention.
+# It covers the temporary files and the directories too.
+umask 077
+
+# Values that arrive from outside and end up inside a JSON string. Interpolating a path
+# that contains a quote or a backslash produces something that is not JSON, and the
+# caller reads that as our data being wrong rather than our formatting.
+pk_json_escape() {
+    local v=$1
+    v=${v//\\/\\\\}
+    v=${v//\"/\\\"}
+    v=${v//$'\n'/ }
+    v=${v//$'\t'/ }
+    printf '%s' "$v"
+}
+
+PK_STAT=""
+pk_mtime() {
+    if [ -z "$PK_STAT" ]; then
+        if stat -c %Y / >/dev/null 2>&1; then PK_STAT=gnu; else PK_STAT=bsd; fi
+    fi
+    if [ "$PK_STAT" = gnu ]; then
+        stat -c %Y "$1" 2>/dev/null || echo 0
+    else
+        stat -f %m "$1" 2>/dev/null || echo 0
+    fi
+}
+
 GIT_CACHE_TTL=6
 # The user id in the name: on Linux TMPDIR is often unset and everything lands in /tmp,
 # which belongs to everybody. Two users on the same machine would fight over the same
@@ -96,13 +141,17 @@ cache_dir="${TMPDIR:-/tmp}/cc-statusline-cache-$(id -u 2>/dev/null || echo 0)"
 #   UI_LANG=it|en|auto   language of the labels (auto = from the locale)
 #   PUBLISH_STATE=yes|no write the quota numbers to file for other tools
 #   DISABLE=a,b,c        blocks to switch off: git,cache,plan,bmad,cost
-PK_PUBLISH="yes"; PK_DISABLE=""
+# OFF unless the config says exactly `yes`. It used to default to "yes", with only the
+# installer writing "no" - so anyone who copied this file by hand published their paths,
+# session ids and usage figures without being asked. The default has to be the safe one:
+# the installer is not the only way this file ends up on a machine.
+PK_PUBLISH="no"; PK_DISABLE=""
 _pk_conf="$HOME/.claude/subscription.conf"
 if [ -f "$_pk_conf" ]; then
     while IFS='=' read -r _pk_k _pk_v; do
         case "$_pk_k" in
             UI_LANG)       [ -z "${CC_STATUSLINE_LANG:-}" ] && [ "$_pk_v" != auto ] && CC_STATUSLINE_LANG=$_pk_v ;;
-            PUBLISH_STATE) PK_PUBLISH=$_pk_v ;;
+            PUBLISH_STATE) [ "$_pk_v" = yes ] && PK_PUBLISH=yes ;;
             DISABLE)       PK_DISABLE=$_pk_v ;;
         esac
     done <<EOF
@@ -158,7 +207,7 @@ git_cache="${cache_dir}/git${cache_key}"
 git_info=""
 git_cached=false
 if [ -s "$git_cache" ]; then
-    cache_age=$(( $(date +%s) - $(stat -f %m "$git_cache" 2>/dev/null || echo 0) ))
+    cache_age=$(( $(date +%s) - $(pk_mtime "$git_cache") ))
     if [ "$cache_age" -ge 0 ] && [ "$cache_age" -lt "$GIT_CACHE_TTL" ]; then
         cached_val=$(cat "$git_cache" 2>/dev/null)
         if [ -n "$cached_val" ]; then
@@ -243,12 +292,10 @@ if [ -z "$git_info" ] && [ "$git_cached" = true ] && git -C "$cwd" rev-parse --g
     [ -z "$fallback_branch" ] && fallback_branch="detached"
     git_info="  ${GIT_GREEN}${fallback_branch}${RESET}"
 
-    dbg="$HOME/.claude/statusline-debug.log"
-    printf '%s | branch mancante in un repo | cwd=%s | da_cache=%s | recuperato=%s\n' \
-        "$(date '+%F %T')" "$cwd" "$git_cached" "$fallback_branch" >> "$dbg" 2>/dev/null
-    if [ "$(wc -l < "$dbg" 2>/dev/null || echo 0)" -gt 300 ]; then
-        tail -100 "$dbg" > "${dbg}.tmp" 2>/dev/null && mv -f "${dbg}.tmp" "$dbg" 2>/dev/null
-    fi
+    # A debug log used to be written here, recording the working path and the branch
+    # to a file that grew forever, with no gate and nobody asking for it. It existed to
+    # catch a defect that has not recurred since it was fixed. Removed 2026-09-03: a
+    # diagnostic that outlives its bug is just a log of where its user has been.
 fi
 
 # --- Directory ---
@@ -341,7 +388,7 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         _rl_sid=${transcript_path##*/}; _rl_sid=${_rl_sid%.jsonl}
     fi
     _rl_payload=$(printf '{"stamp":%s,"five_hour_used_pct":"%s","seven_day_used_pct":"%s","five_hour_resets_at":"%s","seven_day_resets_at":"%s","session_id":"%s"}' \
-        "$_rl_now" "$five_pct" "$week_pct" "$five_reset" "$week_reset" "$_rl_sid")
+        "$_rl_now" "$five_pct" "$week_pct" "$five_reset" "$week_reset" "$(pk_json_escape "$_rl_sid")")
 
     # 1. the per-session file: unconditional among the writers, but still gated by the
     # user's answer. Everything under this heading is DATA PUBLISHED FOR OTHER TOOLS -
@@ -351,7 +398,7 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     if [ "$PK_PUBLISH" != no ] && [ -n "$_rl_sid" ]; then
         _rl_dir="$HOME/.claude/rate-limits.d"
         [ -d "$_rl_dir" ] || mkdir -p "$_rl_dir" 2>/dev/null
-        printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json" 2>/dev/null
+        { printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json"; } 2>/dev/null
     fi
 
     # 2. the shared file, the one tools read: only if we are the freshest.
@@ -395,8 +442,7 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         _rl_fresh=yes                              # nessun aggregato: siamo i primi
     fi
     if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ]; then
-        printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json" 2>/dev/null
-        chmod 600 "$HOME/.claude/rate-limits.json" 2>/dev/null || true
+        { printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json"; } 2>/dev/null
     fi
 
     # --- WHERE THE WEEKLY COUNTER REALLY STARTED ---
@@ -450,9 +496,9 @@ if [ "$PK_PUBLISH" != no ] && [ "$PK_CAN_WRITE" = yes ] && [ -n "$transcript_pat
     _cu_dir="$HOME/.claude/context-usage"
     [ -d "$_cu_dir" ] || mkdir -p "$_cu_dir" 2>/dev/null
     _cu_sid=${transcript_path##*/}; _cu_sid=${_cu_sid%.jsonl}
-    printf '{"stamp":%s,"session_id":"%s","used_pct":%s,"transcript":"%s"}\n' \
-        "$(date +%s)" "$_cu_sid" "$ctx_pct" "$transcript_path" \
-        > "$_cu_dir/$_cu_sid.json" 2>/dev/null
+    { printf '{"stamp":%s,"session_id":"%s","used_pct":%s,"transcript":"%s"}\n' \
+        "$(date +%s)" "$(pk_json_escape "$_cu_sid")" "$ctx_pct" "$(pk_json_escape "$transcript_path")" \
+        > "$_cu_dir/$_cu_sid.json"; } 2>/dev/null
 fi
 
 # The reset times (Unix timestamps) come from the single read at the top of the script.
@@ -509,8 +555,14 @@ if [ -n "$week_pct" ]; then
     has_wreset=false
     week_rem=-1
     if [ -n "$week_reset" ] && [ "$week_reset" != "null" ]; then
-        has_wreset=true
         week_rem=$(( week_reset - now ))
+        # A window whose deadline has passed says nothing about a pace: the counter is
+        # about to be replaced by a new one and the day index would read 0/7, a value
+        # that then got published and accepted by readers as if it meant something.
+        # Better to show the remaining percentage alone until a fresh window arrives.
+        if [ "$week_rem" -gt 0 ]; then
+            has_wreset=true
+        fi
     fi
 
     # How many days the 100% in hand REALLY has to cover. Normally 7, but after a mid-window
@@ -1056,7 +1108,11 @@ if [ -e "${_plan_files[0]}" ]; then
         fi
         _plan_kept+=("$_pf")
     done
-    _plan_files=(${_plan_kept[@]+"${_plan_kept[@]}"})
+    if [ ${#_plan_kept[@]} -gt 0 ]; then
+        _plan_files=("${_plan_kept[@]}")
+    else
+        _plan_files=()
+    fi
 fi
 
 if [ ${#_plan_files[@]} -gt 0 ] && [ -e "${_plan_files[0]}" ]; then
@@ -1219,6 +1275,9 @@ if [ ${#_plan_files[@]} -gt 0 ] && [ -e "${_plan_files[0]}" ]; then
     if [ -n "$_plan_seg" ] && [ -n "$_plan_file" ]; then
         _fade_min=${CC_PLAN_DONE_FADE_MIN:-10}
         case "$_fade_min" in ''|*[!0-9]*) _fade_min=10 ;; esac
+        # Local state, not published data - but it is still a path-derived file on
+        # someone's disk, so it is created private and every write is wrapped in a
+        # group whose stderr is closed BEFORE the redirection is attempted.
         _stamp_dir="$HOME/.claude/state/plan-fade"
         _pkey=${_plan_file//\//_}; _pkey=${_pkey//[^A-Za-z0-9._-]/_}
         _stamp="$_stamp_dir/$_pkey"
@@ -1227,7 +1286,7 @@ if [ ${#_plan_files[@]} -gt 0 ] && [ -e "${_plan_files[0]}" ]; then
                 if [ "$_fade_min" -gt 0 ]; then
                     if [ ! -f "$_stamp" ]; then
                         mkdir -p "$_stamp_dir" 2>/dev/null
-                        _mt=$(stat -f %m "$_plan_file" 2>/dev/null)
+                        _mt=$(pk_mtime "$_plan_file")
                         case "$_mt" in ''|*[!0-9]*) _mt=$(date +%s) ;; esac
                         printf '%s\n' "$_mt" > "$_stamp" 2>/dev/null
                     fi
@@ -1269,7 +1328,7 @@ if ! pk_off cache && [ -n "$transcript_path" ] && [ "$transcript_path" != "null"
     # BSD and GNU stat do not share a syntax, and `stat -f` on GNU reports FILESYSTEM
     # data rather than a timestamp - so on Linux this quietly fed a mount path into
     # arithmetic instead of an epoch. Try one, fall back to the other.
-    _ch_mtime=$(stat -f %m "$transcript_path" 2>/dev/null || stat -c %Y "$transcript_path" 2>/dev/null)
+    _ch_mtime=$(pk_mtime "$transcript_path")
     _ch_om=""; _ch_exp=""; _ch_ttl=""
     if [ -f "$_ch_cache" ]; then
         IFS=' ' read -r _ch_om _ch_exp _ch_ttl < "$_ch_cache" 2>/dev/null
