@@ -903,7 +903,12 @@ if ! pk_off bmad && command -v bmad-loop >/dev/null 2>&1 && [ -f "$HOME/.claude/
         IFS=$'' read -r _bm_status _bm_story _bm_phase _bm_elapsed _bm_reason _bm_grace _bm_defer <<< "$_bm_payload"
         case "$_bm_status" in
             running|in-progress)
-                _bm_body="${GIT_GREEN}⏵${GRAY} $(fmt_hm "${_bm_elapsed:-0}")"
+                # No duration rather than a made-up one. `${_bm_elapsed:-0}` turned an
+                # age the helper could not establish into "0m", which is a plausible
+                # number and therefore reads as a measurement - and a run stuck at "0m"
+                # looks like a stalled run rather than a broken clock.
+                _bm_body="${GIT_GREEN}⏵${GRAY}"
+                [ -n "$_bm_elapsed" ] && _bm_body="${_bm_body} $(fmt_hm "$_bm_elapsed")"
                 [ -n "$_bm_phase" ] && _bm_body="${_bm_body} (${_bm_phase})"
                 [ "$_bm_grace" = "1" ] && _bm_body="${_bm_body} · ${T_GRACEFUL}"
                 ;;

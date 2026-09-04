@@ -120,6 +120,14 @@ PY
         "    win = 18000" \
         "    win = 25200"
 
+    prove_one "the run's start time is read as UTC again" statusline-bmad.py \
+        "            stamp = stamp.astimezone()" \
+        "            stamp = stamp.replace(tzinfo=datetime.timezone.utc)"
+
+    prove_one "an unknown age is drawn as 0m again" statusline.sh \
+        "                [ -n \"\$_bm_elapsed\" ] && _bm_body=\"\${_bm_body} \$(fmt_hm \"\$_bm_elapsed\")\"" \
+        "                _bm_body=\"\${_bm_body} \$(fmt_hm \"\${_bm_elapsed:-0}\")\""
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -578,6 +586,45 @@ render "$h" "$(payload 22.5 41.2)"
 PATH=$_pk_path
 has    "B7  a paused run keeps its reason on line 3" "budget"  "$L3"
 hasnt  "B8  and still nothing on line 2"             "bmad"    "$L2"
+
+# An age the helper could not establish must cost the DURATION, not the block, and
+# above all it must not be drawn as "0m": zero is a plausible number, so it reads as a
+# measurement and stops anybody from looking.
+h=$(new_home)
+plant_run "$h" "running${US}7-4${US}dev${US}${US}${US}0${US}0"
+_pk_path=$PATH; PATH="$h/bin:$PATH"
+render "$h" "$(payload 22.5 41.2)"
+PATH=$_pk_path
+hasnt  "B10 no age: nothing that looks like a duration" "0m"     "$L3"
+has    "B11 but the run, and what it is doing, remain"  "7-4"    "$L3"
+has    "B11b including the phase"                       "(dev)"  "$L3"
+
+# --- the helper itself, where the age is actually computed ---
+# bmad-loop writes `started_at` as plain wall-clock with no offset. Reading it as UTC
+# shifted every run by the machine's offset: measured in CEST, a 42-minute-old run came
+# out at MINUS 78 minutes, which the shell clamped to "0m" for the first two hours of
+# every run. The test lives here, against a planted bmad-loop, because that is where the
+# arithmetic is.
+OFFSET=$(py "import datetime;print(int(datetime.datetime.now().astimezone().utcoffset().total_seconds()))")
+if [ "$OFFSET" = "0" ]; then
+    skip "B12 a naive started_at is local time, not UTC" "this machine runs at UTC, the two readings coincide"
+else
+    hb=$(new_home); mkdir -p "$hb/bin"
+    STARTED=$(py "import datetime;print((datetime.datetime.now()-datetime.timedelta(minutes=42)).strftime('%Y-%m-%dT%H:%M:%S'))")
+    cat > "$hb/bin/bmad-loop" <<FAKE
+#!/bin/sh
+case "\$2" in
+  --json) case "\$1" in
+      list)   printf '{"schema_version":1,"runs":[{"ref":"ab12","run_id":"r1","run_type":"story","started_at":"$STARTED","status":"running","paused_stage":""}]}' ;;
+      status) printf '{"tasks":[{"story_key":"7-4","phase":"dev"}]}' ;;
+  esac ;;
+esac
+FAKE
+    chmod +x "$hb/bin/bmad-loop"
+    AGE=$(PATH="$hb/bin:$PATH" python3 "$REPO/statusline-bmad.py" /tmp | cut -d"$US" -f4)
+    if [ -n "$AGE" ] && [ "$AGE" -gt 2400 ] 2>/dev/null && [ "$AGE" -lt 2700 ] 2>/dev/null; then ok
+    else bad "B12 a naive started_at is local time, not UTC" "about 2520s for a 42-minute-old run" "${AGE:-<empty>}"; fi
+fi
 
 # No run: the row must not be paid for. Two lines, exactly as before this change.
 h=$(new_home)

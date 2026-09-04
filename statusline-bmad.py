@@ -36,13 +36,24 @@ TIMEOUT_S = 8
 
 
 def age_seconds(started, now):
-    """Seconds elapsed since an ISO timestamp, or None if it cannot be read."""
+    """Seconds elapsed since an ISO timestamp, or None if it cannot be read.
+
+    A NAIVE `started_at` IS LOCAL TIME, NOT UTC. bmad-loop writes it as plain
+    wall-clock with no offset, and stamping it UTC shifted every run by the
+    machine's offset. Measured 2026-09-04 in CEST (UTC+2): a run 42 minutes old
+    computed as MINUS 78 minutes, the negative was clamped to zero on the way
+    out, and the line read "0m" for the first two hours of every run. No error
+    anywhere - just a number that stayed still while the run went on.
+
+    `astimezone()` on a naive value is exactly this rule: read it as local,
+    attach the local offset. It follows the machine, daylight saving included.
+    """
     if not started:
         return None
     try:
         stamp = datetime.datetime.fromisoformat(started.replace("Z", "+00:00"))
         if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+            stamp = stamp.astimezone()
         return (now - stamp).total_seconds()
     except Exception:
         return None
@@ -125,7 +136,12 @@ def main():
         return
 
     status = run.get("status") or ""
-    elapsed = int(age_seconds(run.get("started_at"), now) or 0)
+    # A run that started in the future has no age, and printing 0 there is worse
+    # than printing nothing: zero is a plausible number, so it reads as a
+    # measurement and nobody goes looking - which is exactly how the timezone
+    # defect above survived. An empty field makes the duration disappear instead.
+    _age = age_seconds(run.get("started_at"), now)
+    elapsed = "" if _age is None or _age < 0 else str(int(_age))
     story = phase = reason = ""
     graceful = "0"
     deferred = 0
@@ -134,7 +150,7 @@ def main():
     # With no story we fall back to the run's short ref: always present, so the
     # block never appears without saying WHO it is talking about.
     story = story or run.get("ref") or ""
-    print(SEP.join([status, story, phase, str(elapsed), reason, graceful, str(deferred)]))
+    print(SEP.join([status, story, phase, elapsed, reason, graceful, str(deferred)]))
 
 
 if __name__ == "__main__":
