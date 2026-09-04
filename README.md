@@ -151,12 +151,45 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 
 | Block | Looks like | When it appears |
 |---|---|---|
-| **5-hour window** | `5h left 78% · resets in 1h 12m` | on a Claude.ai subscription |
+| **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
 | **7-day window** | `7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
 the colour never contradicts the number. Green above 25% left, orange below, red below 10%.
+
+**The pace, in brackets on the 5-hour block.** `(+4m)` is *how much sooner the quota runs out than
+the window reopens*. Both halves of that sentence are already on the line and neither of them
+answers the question you are actually asking, which is whether you are going too fast.
+
+```
+quota left, expressed as window time  =  5h × (100 − used%)
+pace                                  =  time to the reset  −  that
+```
+
+| | |
+|---|---|
+| `(+4m)` | the quota dies four minutes before the pump reopens — a shade too fast |
+| `(-2h 44m)` | nearly three hours' worth of quota will expire unused — room to push |
+| `(0m)` | the two run out together |
+
+It is built as a difference of *times*, not of percentages, because that is what behaves at the
+edges: at the top of a fresh window — five hours left, nothing spent — it reads `0m` rather than
+accusing you of being behind, and half an hour later with nothing spent it reads `-30m`, which is
+exactly the half hour of window that went by.
+
+**The bands are asymmetric on purpose.** Being blocked costs more than leaving quota on the table,
+so the strict side is the fast one:
+
+| Pace | |
+|---|---|
+| above `+45m` | **red** — the better part of an hour of wall ahead of you |
+| `+15m` to `+45m` | **amber** — running a little hot |
+| `-45m` to `+15m` | **green** — on pace |
+| below `-45m` | **yellow** — nothing is wrong, but you could be using more |
+
+Yellow is not a warning about a problem. It is the one colour that tells you the quota you are
+paying for is about to evaporate unused.
 
 **The daily balance** in brackets is the heart of the thing: `today still 8.1%` is what you can
 still spend before you start borrowing, and `today over by 3.2%` in red is how much you have
@@ -289,7 +322,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.0.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.0.3/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard

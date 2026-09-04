@@ -656,6 +656,11 @@ pick_color() {
     case "$1" in
         R) printf '%s' "$RED" ;;
         O) printf '%s' "$ORANGE" ;;
+        # Two warnings that must not look alike. A: running too fast, the expensive
+        # direction. Y: running too slow, which is only a nudge. Amber is true-colour so
+        # it cannot be confused with the terminal's yellow sitting next to it.
+        A) printf '%s' "$GIT_ORANGE" ;;
+        Y) printf '%s' "$ORANGE" ;;
         *) printf '%s' "$GIT_GREEN" ;;
     esac
 }
@@ -680,6 +685,58 @@ if [ -n "$five_reset" ] && [ "$five_reset" != "null" ]; then
         five_block="${five_block} · ${T_RESETS} $(fmt_hm $(( five_reset - now )))"
     else
         five_block="${GRAY}5h ${T_RESETS} $(fmt_hm $(( five_reset - now )))"
+    fi
+fi
+
+# --- The five-hour PACE ---
+# WHAT THE NUMBER IS, in one sentence: how much sooner (+) or later (-) the quota runs out
+# than the window reopens. Both facts are already on the line, and neither of them answers
+# the question actually being asked, which is "am I going too fast".
+#
+#   quota left, expressed as window time  =  18000s * (100 - used%) / 100
+#   pace                                  =  time to the reset  -  that
+#
+# +4m  : the quota dies four minutes before the pump reopens - a shade too fast.
+# -2h  : two hours' worth of quota will expire unused - room to push.
+#  0   : the two run out together. Nothing to do.
+#
+# It behaves at the edges, which is why this shape was chosen over comparing percentages:
+# at the top of a fresh window (300 min left, 100% in hand) it reads 0, not "you are
+# behind"; half an hour in with nothing spent it reads -30m, which is exactly the half
+# hour of window that went by unused.
+#
+# THE BANDS ARE ASYMMETRIC ON PURPOSE. Being blocked costs more than leaving quota on the
+# table, so the strict side is the fast one: green stops at +15m, and only stretches to
+# -45m the other way.
+five_pace=""
+if [ -n "$five_pct" ] && [ -n "$five_reset" ] && [ "$five_reset" != "null" ]; then
+    IFS=' ' read -r _fp_sec _fp_col <<EOF
+$(awk -v used="$five_pct" -v left="$(( five_reset - now ))" 'BEGIN{
+    win = 18000
+    if (left < 0) left = 0
+    if (left > win) left = win          # a reset further out than the window is not one
+    rem = 100 - used
+    if (rem < 0) rem = 0
+    if (rem > 100) rem = 100
+    x = left - win * rem / 100
+    # Rounded to the minute, not truncated: the display shows minutes, and 3m59s printed
+    # as "3m" is off by a whole unit of the only unit anybody reads here.
+    x = int(x / 60 + (x >= 0 ? 0.5 : -0.5)) * 60
+    printf "%d %s", x, (x > 2700 ? "R" : (x > 900 ? "A" : (x >= -2700 ? "G" : "Y")))
+}')
+EOF
+    if [ -n "$_fp_sec" ]; then
+        _fp_c=$(pick_color "$_fp_col")
+        # Under a minute either way there is no sign to give: "-0m" on a window that has
+        # just opened reads as a warning, and it is the opposite of one.
+        if [ "$_fp_sec" -lt 60 ] 2>/dev/null && [ "$_fp_sec" -gt -60 ] 2>/dev/null; then
+            five_pace=" ${_fp_c}(0m)${GRAY}"
+        elif [ "$_fp_sec" -lt 0 ] 2>/dev/null; then
+            five_pace=" ${_fp_c}(-$(fmt_hm $(( - _fp_sec ))))${GRAY}"
+        else
+            five_pace=" ${_fp_c}(+$(fmt_hm "$_fp_sec"))${GRAY}"
+        fi
+        five_block="${five_block}${five_pace}"
     fi
 fi
 

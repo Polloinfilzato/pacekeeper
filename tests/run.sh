@@ -112,6 +112,14 @@ PY
         "    [ -n \"\$c\" ] && [ \"\$c\" -ge 20 ] 2>/dev/null || c=\"\"" \
         "    c=\"\""
 
+    prove_one "the pace bands all collapse into one colour" statusline.sh \
+        "    printf \"%d %s\", x, (x > 2700 ? \"R\" : (x > 900 ? \"A\" : (x >= -2700 ? \"G\" : \"Y\")))" \
+        "    printf \"%d %s\", x, \"G\""
+
+    prove_one "the pace is measured against the wrong window" statusline.sh \
+        "    win = 18000" \
+        "    win = 25200"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -346,6 +354,69 @@ quiet "P   a division by zero smuggled in as a reset stamp"
 hasnt "P   and nothing about division reaches the line" "division" "$L2"
 
 # ==================================================================== 4. cost
+section "The five-hour pace: how much sooner the quota dies than the window reopens"
+
+# The colour is half the message, so the tests read the escape sequence, not just the text.
+# Reading only the digits would let every band silently collapse into one colour.
+pace_of() {   # $1 used%, $2 minutes to the reset -> PACE (text) and PACE_COL (name)
+    local h now
+    h=$(new_home); now=$(date +%s)
+    render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":1},"rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s},"seven_day":{"used_percentage":43,"resets_at":%s}}}' "$1" "$((now + $2 * 60))" "$((now + 300000))")"
+    PACE=$(printf '%s' "$L2" | sed 's/ *│.*//' | sed 's/.*(\(.*\))/\1/')
+    local raw seg
+    raw=$(HOME="$h" TMPDIR="$h/tmp/" CC_STATUSLINE_LANG=en COLUMNS=200 bash "$SL" < "$h/in.json" 2>/dev/null | sed -n 2p)
+    seg=${raw%%│*}
+    case "$(printf '%s' "$seg" | grep -o $'\033\[[0-9;]*m(' | tail -1)" in
+        $'\033[31m('*)                RGB=red ;;
+        $'\033[38;2;255;165;0m('*)    RGB=amber ;;
+        $'\033[33m('*)                RGB=yellow ;;
+        $'\033[38;2;0;200;0m('*)      RGB=green ;;
+        *)                            RGB=none ;;
+    esac
+    PACE_COL=$RGB
+}
+
+# The worked example this was specified from: 44% left, 2h16 to the reset -> +4m, on pace.
+pace_of 56 136
+equals "X1  the specified example reads +4m" "+4m" "$PACE"
+equals "X1b and it is green"                 "green" "$PACE_COL"
+
+# The two ends of a window, where a pace built on percentages alone goes wrong.
+pace_of 0 300
+equals "X2  a window just opened is level, not behind" "0m" "$PACE"
+equals "X2b and green"                                 "green" "$PACE_COL"
+
+pace_of 0 270
+equals "X3  half an hour gone with nothing spent" "-30m" "$PACE"
+
+pace_of 100 120
+equals "X4  blocked, two hours of wall ahead" "red" "$PACE_COL"
+
+pace_of 88 100
+equals "X5  more than 45m too fast is red" "red" "$PACE_COL"
+
+pace_of 70 120
+equals "X6  half an hour too fast is amber" "amber" "$PACE_COL"
+
+pace_of 50 160
+equals "X7  nine minutes too fast is still on pace" "green" "$PACE_COL"
+
+pace_of 20 200
+equals "X8  forty minutes of slack is the edge of green" "green" "$PACE_COL"
+
+pace_of 10 180
+equals "X9  an hour and a half of slack: use more"  "yellow" "$PACE_COL"
+equals "X9b and it says how much"                   "-1h 30m" "$PACE"
+
+# Neither figure alone is enough to compute a pace, and inventing one is worse than none.
+h=$(new_home); now=$(date +%s)
+render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":1},"rate_limits":{"five_hour":{"used_percentage":".","resets_at":%s},"seven_day":{"used_percentage":43,"resets_at":%s}}}' "$((now+7000))" "$((now+300000))")"
+hasnt "X10 an unreadable percentage draws no pace" "(" "${L2%%│*}"
+matches "X10b but the countdown is still there" "5h resets in" "$L2"
+
+h=$(new_home); render "$h" "$(payload 22 43 "x" "$(( $(date +%s) + 300000 ))")"
+hasnt "X11 an unreadable reset draws no pace" "(" "${L2%%│*}"
+
 section "Folding line two when the terminal is too narrow"
 
 # Claude Code truncates a status line that overruns the width, so anything past the right
