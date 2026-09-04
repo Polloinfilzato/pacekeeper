@@ -9,7 +9,7 @@
 # throwaway home and a throwaway TMPDIR, because this program WRITES while it runs: a
 # check that "only reads" once destroyed a real quota record on the author's machine.
 #
-# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces eight of the repaired defects
+# PROVE IT CAN FAIL. `./tests/run.sh --prove` re-introduces the repaired defects
 # into a copy of the sources, one at a time, and asserts the suite goes RED for each. A
 # suite that has never been seen to fail certifies nothing.
 
@@ -30,7 +30,7 @@ esac
 trap 'rm -rf "$ROOT"' EXIT
 
 # ------------------------------------------------------------------- --prove
-# A suite nobody has seen fail certifies nothing. This re-introduces eight of the defects
+# A suite nobody has seen fail certifies nothing. This re-introduces the defects
 # that were actually repaired, one at a time, into a COPY of the sources, and demands that
 # the suite go red for each. If one of them comes back green, that case is decoration.
 if [ "${1:-}" = "--prove" ]; then
@@ -64,7 +64,7 @@ PY
         fi
     }
 
-    printf 'Putting eight repaired defects back, one at a time:\n\n'
+    printf 'Putting the repaired defects back, one at a time:\n\n'
 
     prove_one "the renewal countdown prints nothing" statusline.sh \
         "    print((target - today).days, int(until.timestamp()), hhmm.strftime('%H:%M') if hhmm else '-')" \
@@ -97,6 +97,20 @@ PY
     prove_one "the bmad run goes back onto line 2" statusline.sh \
         "[ -n \"\$bmad_block\" ] && bmad_info=\"  \${bmad_block}\${RESET}\"" \
         "[ -n \"\$bmad_block\" ] && rate_info=\"\${rate_info}\${sep}\${bmad_block}\${RESET}\""
+
+    prove_one "an exceeded limit is thrown away again" statusline.sh \
+        "    [ \"\${1%%.*}\" -le 1000 ] 2>/dev/null || return 1" \
+        "    [ \"\${1%%.*}\" -le 100 ] 2>/dev/null || return 1"
+
+    prove_one "the countdown depends on the percentage again" statusline.sh \
+        "if [ -n \"\$five_reset\" ] && [ \"\$five_reset\" != \"null\" ]; then
+    if [ -n \"\$five_block\" ]; then" \
+        "if [ -n \"\$five_reset\" ] && [ \"\$five_reset\" != \"null\" ] && [ -n \"\$five_pct\" ]; then
+    if [ -n \"\$five_block\" ]; then"
+
+    prove_one "line two stops folding and is cut off again" statusline.sh \
+        "    [ -n \"\$c\" ] && [ \"\$c\" -ge 20 ] 2>/dev/null || c=\"\"" \
+        "    c=\"\""
 
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
@@ -153,14 +167,22 @@ payload() {
 }
 
 # Runs the status line and leaves the result in OUT / L1 / L2 / ERR.
+# Same as render(), with a terminal width declared. pk_cols reads $COLUMNS first, so this
+# is the honest way to ask "what would this look like in a window that narrow".
+render_at() {
+    local cols="$1"; shift
+    COLUMNS="$cols" render "$@"
+}
+
 render() {
     local home="$1" json="$2"
     printf '%s' "$json" > "$home/in.json"
-    OUT=$(HOME="$home" TMPDIR="$home/tmp/" CC_STATUSLINE_LANG=en \
+    OUT=$(HOME="$home" TMPDIR="$home/tmp/" CC_STATUSLINE_LANG=en COLUMNS="${COLUMNS:-}" \
             bash "$SL" < "$home/in.json" 2>"$home/stderr.txt")
     OUT=$(printf '%s' "$OUT" | LC_ALL=C sed 's/\x1b\[[0-9;]*m//g')
     L1=$(printf '%s' "$OUT" | sed -n '1p')
     L2=$(printf '%s' "$OUT" | sed -n '2p')
+    NLINES=$(printf '%s\n' "$OUT" | grep -c '')
     L3=$(printf '%s' "$OUT" | sed -n '3p')
     NLINES=$(printf '%s' "$OUT" | grep -c '')
     ERR=$(cat "$home/stderr.txt")
@@ -279,13 +301,43 @@ for p in 0 0.5 99.9 100; do
     quiet "P   [$p]"
 done
 
-for p in '"08"' '"."' '"1..2"' '"-3"' '"1e2"'; do
-    h=$(new_home)
-    now=$(date +%s)
-    render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":12},"rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s},"seven_day":{"used_percentage":%s,"resets_at":%s}}}' "$p" "$((now+7000))" "$p" "$((now+300000))")"
-    hasnt "P   [$p] is not a number and must be dropped" "5h" "$L2"
+# A percentage above 100 is not a broken field, it is the limit exceeded: Claude Code
+# computes this as `utilization * 100` and does not clamp it. Throwing it away used to
+# delete the five-hour block at the one moment it is worth reading.
+for p in 100.7 101 105 999; do
+    h=$(new_home); render "$h" "$(payload "$p" 43)"
+    has  "P   [$p] over the limit still draws the block" "5h" "$L2"
+    has  "P   [$p] and reports nothing left"             "left 0%" "$L2"
     quiet "P   [$p]"
 done
+
+h=$(new_home); render "$h" "$(payload 1001 43)"
+hasnt "P   [1001] a percentage in the thousands is not drawn" "left 0%" "$L2"
+
+# A percentage this program cannot read must cost the PERCENTAGE, never the countdown.
+# The reset time is the answer you want exactly when the other number is unusable.
+for p in '"08"' '"."' '"1..2"' '"-3"' '"1e2"' 'null'; do
+    h=$(new_home)
+    now=$(date +%s)
+    render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":12},"rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s},"seven_day":{"used_percentage":43,"resets_at":%s}}}' "$p" "$((now+7000))" "$((now+300000))")"
+    # Only the five-hour segment: everything up to the first separator.
+    hasnt "P   [$p] the unreadable percentage is dropped" "left" "${L2%%│*}"
+    matches "P   [$p] but the countdown survives it" "5h resets in [0-9]" "$L2"
+    quiet "P   [$p]"
+done
+
+# Neither number readable: then there is nothing to say, and the block goes.
+h=$(new_home)
+now=$(date +%s)
+render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":12},"rate_limits":{"five_hour":{"used_percentage":".","resets_at":"x"},"seven_day":{"used_percentage":43,"resets_at":%s}}}' "$((now+300000))")"
+hasnt "P   neither figure readable: no five-hour block at all" "5h" "$L2"
+
+# The window Claude Code drops from the payload once its reset instant has passed.
+h=$(new_home)
+now=$(date +%s)
+render "$h" "$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"O"},"context_window":{"used_percentage":12},"rate_limits":{"seven_day":{"used_percentage":43,"resets_at":%s}}}' "$((now+300000))")"
+hasnt "P   no five_hour key at all: nothing invented" "5h" "$L2"
+has   "P   and the weekly block is untouched by its absence" "7d" "$L2"
 
 h=$(new_home)
 now=$(date +%s)
@@ -294,6 +346,49 @@ quiet "P   a division by zero smuggled in as a reset stamp"
 hasnt "P   and nothing about division reaches the line" "division" "$L2"
 
 # ==================================================================== 4. cost
+section "Folding line two when the terminal is too narrow"
+
+# Claude Code truncates a status line that overruns the width, so anything past the right
+# edge is not merely ugly, it is GONE. Reported from a Mac kept at a large font.
+widest() {   # the widest visible line among the quota lines
+    local w=0 n line
+    while IFS= read -r line; do
+        n=${#line}
+        [ "$n" -gt "$w" ] && w=$n
+    done <<< "$(printf '%s' "$OUT" | sed -n '2,$p')"
+    printf '%s' "$w"
+}
+
+h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"
+render_at 200 "$h" "$(payload 22.5 41.2)"
+equals "W1  a wide terminal keeps everything on one line" "2" "$NLINES"
+
+h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"
+render_at 60 "$h" "$(payload 22.5 41.2)"
+[ "$NLINES" -gt 2 ] && ok || bad "W2  a narrow terminal folds" "more than 2 lines" "$NLINES"
+w=$(widest)
+[ "$w" -le 60 ] && ok || bad "W3  and no folded line overruns the width" "<= 60" "$w"
+has   "W4  the block that used to fall off the edge is present" "plan" "$OUT"
+has   "W5  and so is the charge inside it" "billed" "$OUT"
+
+# A block is never cut in half: each line either holds a whole block or starts a new one.
+render_at 60 "$h" "$(payload 22.5 41.2)"
+printf '%s' "$OUT" | sed -n '2,$p' | grep -q '│[[:space:]]*$' \
+    && bad "W6  no line ends on a dangling separator" "no trailing │" "$(printf '%s' "$OUT" | sed -n '2,$p')" || ok
+
+# No usable width: the old single line, unchanged. A machine whose status line has no
+# controlling terminal must not fold at random, and neither must one reporting nonsense.
+# `0` and `8` are the two ways to say "no answer here" that a test can force; the genuine
+# no-controlling-terminal case cannot be produced portably from inside a test, which is
+# why the fallback is written to be the DO-NOTHING branch rather than a guess.
+h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"
+render_at 0 "$h" "$(payload 22.5 41.2)"
+equals "W7  no usable width: nothing folds" "2" "$NLINES"
+
+h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"
+render_at 8 "$h" "$(payload 22.5 41.2)"
+equals "W8  an absurd width is ignored rather than obeyed" "2" "$NLINES"
+
 section "The theoretical cost"
 
 mktranscript() { printf '%s\n' "$2" > "$1"; }

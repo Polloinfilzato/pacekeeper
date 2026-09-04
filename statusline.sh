@@ -57,6 +57,11 @@ EOF
 # `0[0-9]*` is rejected too: shell arithmetic reads a leading zero as octal, so "08"
 # produces "value too great for base" printed on the status line. And a lone "." passes
 # a naive digits-or-dot test while being no number at all.
+# Extended patterns, for the one substitution that strips colour escapes when measuring
+# how wide a block is on screen. It only ADDS syntax; every plain glob in here keeps
+# meaning what it meant.
+shopt -s extglob
+
 pk_int()  { case "$1" in ''|*[!0-9]*|0?*) return 1 ;; *) return 0 ;; esac; }
 pk_pct()  {
     # `0?*` was meant to catch a leading zero like "08", but it also matches "0.5" - so
@@ -66,7 +71,14 @@ pk_pct()  {
     case "$1" in ''|*[!0-9.]*|*.*.*|.) return 1 ;; esac
     case "$1" in 0[0-9]*) return 1 ;; esac
     case "${1%%.*}" in ''|*[!0-9]*) return 1 ;; esac
-    [ "${1%%.*}" -le 100 ] 2>/dev/null || return 1
+    # NOT `-le 100`. Claude Code computes this field as `utilization * 100` with no clamp,
+    # so it goes ABOVE 100 the moment a limit is exceeded - the binary's own documentation
+    # of the sibling `spend_limit` field says so in as many words: "0-100, above 100 once
+    # exceeded". Rejecting 101 threw away the whole five-hour block AT THE ONE MOMENT it is
+    # worth reading, when you are blocked and want to know when it lifts. Reported by the
+    # user on 2026-09-04 and reproduced here: at 101 the block vanished, countdown included.
+    # A ceiling stays, because a percentage in the thousands is a broken field, not usage.
+    [ "${1%%.*}" -le 1000 ] 2>/dev/null || return 1
     return 0
 }
 # An unbounded reset instant is accepted by the grammar and then produces a countdown of
@@ -649,6 +661,11 @@ pick_color() {
 }
 
 # The 5-hour block
+# THE COUNTDOWN DOES NOT DEPEND ON THE PERCENTAGE, and that is the whole point of the
+# shape of this block. The two facts arrive in the same payload but they fail apart: a
+# percentage this program cannot read used to take the reset time down with it, so the
+# line went silent precisely when the answer it was hiding - "how long until it lifts" -
+# was the only one being asked. Whatever is readable is drawn.
 five_block=""
 if [ -n "$five_pct" ]; then
     # A single awk for the remaining percentage plus the colour code
@@ -657,8 +674,12 @@ $(awk -v p="$five_pct" 'BEGIN{ v=100-p; if (v<0) v=0; printf "%.0f %s", v, (v<=1
 EOF
     fc=$(pick_color "$five_col")
     five_block="${GRAY}5h ${fc}${T_LEFT} ${five_left}%${GRAY}"
-    if [ -n "$five_reset" ] && [ "$five_reset" != "null" ]; then
+fi
+if [ -n "$five_reset" ] && [ "$five_reset" != "null" ]; then
+    if [ -n "$five_block" ]; then
         five_block="${five_block} · ${T_RESETS} $(fmt_hm $(( five_reset - now )))"
+    else
+        five_block="${GRAY}5h ${T_RESETS} $(fmt_hm $(( five_reset - now )))"
     fi
 fi
 
@@ -1054,18 +1075,67 @@ if [ -n "$renew_days" ] || [ -n "$tier_label" ]; then
     fi
 fi
 
-# Assembling line 2: whichever blocks exist, separated by a vertical bar
+# Assembling line 2: whichever blocks exist, separated by a vertical bar - and folded onto
+# further lines when the terminal is not wide enough to hold them.
+#
+# WHY IT HAS TO FOLD. Claude Code TRUNCATES a status line that overruns the width, it does
+# not wrap it, so the blocks on the right simply stop existing. Reported on 2026-09-04 from
+# a Mac whose owner keeps a large font: the subscription block was off the edge and nobody
+# could have known it was there.
+#
+# A BLOCK IS NEVER SPLIT. It moves to the next line whole - half a countdown is worse than
+# a second row.
+#
+# WHERE THE WIDTH COMES FROM. Not from the payload: there is no width field in it (checked
+# against the JSON documentation inside the 2.1.260 binary). $COLUMNS is not exported to a
+# hook either. The controlling terminal is the only source, and a process that has none
+# folds NOTHING rather than guessing - the old single line is the fallback, so a machine
+# where this cannot be asked behaves exactly as before.
+pk_cols() {
+    # $COLUMNS FIRST, and on Claude Code it is the answer: measured on 2026-09-04 by
+    # recording what this function saw across four live sessions - 152, 195, 273, each the
+    # real width of its own pane. So the common case costs nothing at all, no process.
+    # `stty` stays as the fallback for whatever else ends up running this file.
+    local c=""
+    c=${COLUMNS:-}
+    if [ -z "$c" ]; then
+        c=$( { stty size < /dev/tty; } 2>/dev/null )
+        c=${c##* }
+    fi
+    case "$c" in ''|*[!0-9]*) c="" ;; esac
+    # Below about twenty columns there is no layout to speak of, and a bogus small number
+    # would put every block on a line of its own.
+    [ -n "$c" ] && [ "$c" -ge 20 ] 2>/dev/null || c=""
+    printf '%s' "$c"
+}
+
+# The visible width of a block: the colour escapes are bytes on the wire and zero columns
+# on the screen. `${#s}` counts CHARACTERS, not bytes, so the box-drawing bar and the
+# accented labels count as the one column they occupy.
+pk_visible() {
+    local _s=${1//$'\033'\[*([0-9;])m/}
+    printf '%s' "${#_s}"
+}
+
 sep="${GRAY}   │   "
-rate_info=""
+_sep_w=7          # "   │   " on screen
+_indent="  "
+_cols=$(pk_cols)
+rate_info=""; _cur=""; _cur_w=0
 for blk in "$five_block" "$week_block" "$renew_block"; do
     [ -z "$blk" ] && continue
-    if [ -z "$rate_info" ]; then
-        rate_info="  ${blk}"
+    _w=$(pk_visible "$blk")
+    if [ -z "$_cur" ]; then
+        _cur="${_indent}${blk}"; _cur_w=$(( ${#_indent} + _w ))
+    elif [ -n "$_cols" ] && [ $(( _cur_w + _sep_w + _w )) -gt "$_cols" ]; then
+        rate_info="${rate_info}${_cur}${RESET}
+"
+        _cur="${_indent}${blk}"; _cur_w=$(( ${#_indent} + _w ))
     else
-        rate_info="${rate_info}${sep}${blk}"
+        _cur="${_cur}${sep}${blk}"; _cur_w=$(( _cur_w + _sep_w + _w ))
     fi
 done
-[ -n "$rate_info" ] && rate_info="${rate_info}${RESET}"
+[ -n "$_cur" ] && rate_info="${rate_info}${_cur}${RESET}"
 
 # Assembling line 3: the bmad-loop run, on a line of its own.
 # It used to ride at the end of line 2, after the two quota windows and the renewal
