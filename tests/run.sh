@@ -38,8 +38,15 @@ if [ "${1:-}" = "--prove" ]; then
     prove_one() {
         local label="$1" file="$2" old="$3" new="$4" dir rc
         dir=$(mktemp -d "$ROOT/mutant.XXXXXX")
+        # EVERY source the suite reads has to be copied, not just the ones being mutated.
+        # `bmad-versions.sh` was missing and the cases that exercise it (F1, F2) then failed
+        # in EVERY mutant — so every mutation reported "caught" while being caught by a
+        # missing file rather than by the defect. A mutation caught for the wrong reason
+        # certifies nothing, and it looks exactly like one caught for the right reason.
         cp "$REPO/statusline.sh" "$REPO/install.sh" "$REPO/pacekeeper-quota" \
-           "$REPO/statusline-bmad.py" "$REPO/statusline-cache.py" "$dir/" || return 1
+           "$REPO/statusline-bmad.py" "$REPO/statusline-cache.py" "$REPO/bmad-versions.sh" \
+           "$dir/" || return 1
+        mkdir -p "$dir/tests" && cp "$REPO/README.md" "$dir/" 2>/dev/null
         if ! python3 - "$dir/$file" "$old" "$new" <<'PY'
 import sys
 path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
