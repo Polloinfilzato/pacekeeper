@@ -987,25 +987,24 @@ $(LC_ALL=C awk -v p="$week_pct" -v left="$week_rem" -v win="${week_span:-604800}
 EOF
         if [ -n "$_wp_sec" ]; then
             _wp_c=$(pick_color "$_wp_col")
-            # ONE rounding, taken from the raw seconds. Rounding to the hour and THEN to the
-            # day rounds twice: an exact +59h30m became +60h and printed +3g, though it is
-            # nearer two days than three.
-            # A COMPACT FORMAT, and the reason is width rather than taste. Inline inside the
-            # seven-day block this made the line 63 columns against a 60 ceiling; a block is
-            # never folded in half, so a block that cannot fit gets TRUNCATED -- and on this
-            # status line truncated means gone, not ugly. Hours below two days, whole days
-            # above: at a seven-day scale the day is the unit anybody reads.
+            # TWO UNITS, LIKE THE FIVE-HOUR FIGURE — Ema, 2026-09-05: «+29h non mi piace,
+            # preferisco +1g e 5h». Not taste: `(+1h 15m)` on the five-hour block already
+            # carries two units, so "+1g 5h" is what the symmetry he asked for actually means.
+            # `fmt_dh` gives days+hours above a day and hours+minutes below, which is the same
+            # shape at both scales.
+            # ROUNDED TO THE MINUTE, ONCE, from the raw seconds — the same unit the five-hour
+            # figure rounds to. Rounding to the hour and then formatting would round twice: an
+            # exact +59h30m became +60h and printed as three days when it is nearer two.
             _wp_abs=$(( _wp_sec < 0 ? -_wp_sec : _wp_sec ))
-            if [ "$_wp_abs" -lt 1800 ]; then
-                # Under half an hour it rounds to zero, and a zero carries no sign: "-0h" on a
-                # window that has just opened reads as a warning, and it is the opposite of one.
+            _wp_abs=$(( (_wp_abs + 30) / 60 * 60 ))
+            if [ "$_wp_abs" -lt 60 ]; then
+                # Under a minute there is no sign to give: "-0m" on a window that has just
+                # opened reads as a warning, and it is the opposite of one.
                 _wp_txt="0h"
-            elif [ "$_wp_abs" -lt 172800 ]; then
-                _wp_txt="$(( (_wp_abs + 1800) / 3600 ))h"
             else
-                _wp_txt="$(( (_wp_abs + 43200) / 86400 ))${T_DAY}"
+                _wp_txt="$(fmt_dh "$_wp_abs")"
             fi
-            [ "$_wp_abs" -ge 1800 ] && { [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"; }
+            [ "$_wp_abs" -ge 60 ] && { [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"; }
             # IT IS ITS OWN BLOCK: see the width note above. It carries the "7d" prefix because
             # a bare "+29h" after a separator could be taken for the five-hour figure, which is
             # the one thing it must never be.
@@ -1584,8 +1583,14 @@ _cols=$(pk_cols)
 # only here is the terminal width known.
 if [ -n "$week_pace_block" ] && [ -n "$week_block" ] && [ -n "${week_pace_bare:-}" ]; then
     _merged="${week_block} ${week_pace_paren}"
-    if [ "$_cols" -gt 0 ] 2>/dev/null \
-       && [ "$(pk_visible "${_indent}${_merged}")" -le "$_cols" ] 2>/dev/null; then
+    # AN UNKNOWN WIDTH MEANS ROOM, NOT ABSENCE OF ROOM. With no usable width nothing folds at
+    # all (see W7: the old single line is kept unchanged), so a line that will not be split has
+    # nothing to gain from splitting this figure off — and treating "I could not measure" as
+    # "it does not fit" made the standalone form appear on the very terminals that had the most
+    # space. Measured immediately after installing, 2026-09-05: piped with no tty, the figure
+    # came out as its own block on a line that was never going to fold.
+    if [ "$_cols" -le 0 ] 2>/dev/null \
+       || [ "$(pk_visible "${_indent}${_merged}")" -le "$_cols" ] 2>/dev/null; then
         week_block="$_merged"
         week_pace_block=""
     fi

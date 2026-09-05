@@ -153,7 +153,7 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 |---|---|---|
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
 | **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
-| **7-day pace** | `(+29h)`, in brackets on the 7-day block — or `7d pace +29h` on its own when the line is too narrow | with the 7-day window |
+| **7-day pace** | `(+1g 5h)`, in brackets on the 7-day block — or `7d pace +1g 5h` on its own when the line is too narrow | with the 7-day window |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
@@ -179,7 +179,7 @@ edges: at the top of a fresh window — five hours left, nothing spent — it re
 accusing you of being behind, and half an hour later with nothing spent it reads `-30m`, which is
 exactly the half hour of window that went by.
 
-**The same pace, for the week.** `7d pace +29h` answers the identical question over the seven-day
+**The same pace, for the week.** `(+1g 5h)` answers the identical question over the seven-day
 window, and it is the same arithmetic with a different denominator:
 
 ```
@@ -189,7 +189,7 @@ pace                                      =  time to the reset  −  that
 
 | | |
 |---|---|
-| `+29h` | the weekly allowance dies twenty-nine hours before the window reopens |
+| `+1g 5h` | the weekly allowance dies a day and five hours before the window reopens |
 | `-8h` | eight hours' worth of allowance will expire unused |
 | `0h` | the two run out together |
 
@@ -210,7 +210,7 @@ two blocks are not the same length: the 5-hour block carries one bracket group a
 already carries one, so a second takes the line past 60 columns — and a block is never folded in
 half, so a block that cannot fit gets truncated, which on a status line means gone rather than
 ugly. Hence: in brackets when it fits, and a block of its own when it does not. The standalone form
-carries a `7d pace` label so a bare `+29h` after a separator can never be mistaken for the
+carries a `7d pace` label so a bare `+1g 5h` after a separator can never be mistaken for the
 five-hour figure.
 
 Its bands are the five-hour ones scaled to a window 33.6 times longer, rounded to units anybody
@@ -414,7 +414,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.2.1/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
