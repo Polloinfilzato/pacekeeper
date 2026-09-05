@@ -233,6 +233,7 @@ if [ "$LANG_IT" = 1 ]; then
     T_OVER="oggi oltre di"; T_SUB="abbonamento";      T_BILL="addebito"
     T_TODAY="oggi";        T_TOMORROW="domani";       T_IN="tra"
     T_DAY="g"
+    T_PACE="passo"
     T_DECSEP=","
     T_PAUSED="IN PAUSA";   T_STOPPED="FERMATA";   T_CRASH="CRASH"
     T_INTERRUPTED="INTERROTTA"; T_UNKNOWN="STATO IGNOTO"
@@ -243,6 +244,7 @@ else
     T_OVER="today over by"; T_SUB="plan";             T_BILL="billed"
     T_TODAY="today";       T_TOMORROW="tomorrow";     T_IN="in"
     T_DAY="d"
+    T_PACE="pace"
     T_DECSEP="."
     T_PAUSED="PAUSED";     T_STOPPED="STOPPED";   T_CRASH="CRASH"
     T_INTERRUPTED="INTERRUPTED"; T_UNKNOWN="UNKNOWN STATE"
@@ -928,6 +930,92 @@ EOF
             && mv -f "$HOME/.claude/quota-state.tmp.$$" "$HOME/.claude/quota-state"; } 2>/dev/null
     fi
 
+    # --- The SEVEN-DAY PACE, the exact twin of the five-hour one -------------------------
+    # Asked for by Ema on 2026-09-05 20:43, in as many words: «voglio concettualmente la
+    # stessa identica cosa anche sulla soglia dei sette giorni».
+    #
+    #   quota left, expressed as window time  =  (week_days * 86400) * (100 - used%) / 100
+    #   pace                                  =  time to the reset  -  that
+    #
+    # +1g 5h : the weekly allowance dies a day and five hours BEFORE the window reopens.
+    # -8h    : eight hours' worth of allowance will expire unused - room to push.
+    #  0h    : the two run out together, which is the target.
+    #
+    # THE DENOMINATOR IS `week_days`, NOT A HARD 7. After a mid-window restart of the counter
+    # the 100% in hand has fewer days to cover, and that is exactly the case where a hard 7
+    # would flatter the number: it would spread the allowance over more days than it really
+    # has and report room that does not exist.
+    #
+    # WHY THIS DOES NOT REPLACE `(oggi oltre di X%)`. Two reasons, the first being Ema's own
+    # ruling of 2026-08-03: offered the swap of a pace indicator for a residual one, he
+    # refused, because the question he asks himself is «finora ho lavorato troppo o troppo
+    # poco», which only a figure judging the pace HELD answers. Both of these judge the pace
+    # held - they are one fact in two units. The second reason is mechanical: the percentage
+    # is the figure `quota-semaforo` actually enforces, so dropping it would leave the
+    # enforced number invisible on the line that exists to show it. He asked for «anche».
+    #
+    # THE BANDS ARE SCALED, NOT REINVENTED. The five-hour reading turns amber at +15m and red
+    # at +45m on an 18000s window; seven days is 33.6 times longer, which puts the twins at
+    # about 8h and 25h. Rounded to 8h and 24h because a day is the unit anybody reads here.
+    # The asymmetry is kept for the reason it exists there: being blocked costs more than
+    # leaving allowance on the table, so the strict side is the fast one.
+    week_pace_block=""
+    if [ "$has_wreset" = true ] && [ -n "${week_left:-}" ] && [ -n "${week_rem:-}" ]; then
+        IFS=' ' read -r _wp_sec _wp_col <<EOF
+$(awk -v rem="$week_left" -v left="$week_rem" -v days="${week_days:-7}" 'BEGIN{
+    if (days < 1) days = 7
+    win = days * 86400
+    if (left < 0) left = 0
+    if (left > win) left = win          # a reset further out than the window is not one
+    if (rem < 0) rem = 0
+    if (rem > 100) rem = 100
+    x = left - win * rem / 100
+    # Rounded to the HOUR, not truncated: the display shows days and hours, and 59 minutes
+    # printed as "0h" is off by a whole unit of the smallest unit anybody reads here.
+    x = int(x / 3600 + (x >= 0 ? 0.5 : -0.5)) * 3600
+    printf "%d %s", x, (x > 86400 ? "R" : (x > 28800 ? "A" : (x >= -86400 ? "G" : "Y")))
+}')
+EOF
+        if [ -n "$_wp_sec" ]; then
+            _wp_c=$(pick_color "$_wp_col")
+            # Under an hour either way there is no sign to give: "-0h" on a window that has
+            # just opened reads as a warning, and it is the opposite of one.
+            # A COMPACT FORMAT, and the reason is width rather than taste. This figure lives
+            # INSIDE the seven-day block, and a block is never folded in half (W6), so every
+            # character added here is a character the whole block must still fit in at 60
+            # columns. `fmt_dh`'s "1g 5h" made the block 64 wide against a 60 ceiling and
+            # broke W3 — and an overrun is not merely ugly: Claude Code TRUNCATES the status
+            # line, so what passes the right edge is gone.
+            # So: hours below two days, whole days above. At a seven-day scale the day is
+            # the unit anybody reads, and "+29h" carries the same decision as "+1g 5h" in
+            # four characters instead of six. Worst case here is 5 columns (" +29h").
+            _wp_abs=$(( _wp_sec < 0 ? -_wp_sec : _wp_sec ))
+            if [ "$_wp_sec" -lt 3600 ] 2>/dev/null && [ "$_wp_sec" -gt -3600 ] 2>/dev/null; then
+                # Under an hour either way there is no sign to give: "-0h" on a window that
+                # has just opened reads as a warning, and it is the opposite of one.
+                _wp_txt="0h"
+            else
+                if [ "$_wp_abs" -lt 172800 ]; then
+                    _wp_txt="$(( _wp_abs / 3600 ))h"
+                else
+                    # rounded, not truncated: 2g23h is nearer three days than two
+                    _wp_txt="$(( (_wp_abs + 43200) / 86400 ))${T_DAY}"
+                fi
+                [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"
+            fi
+            # IT IS ITS OWN BLOCK, and that is not a layout preference — it is the only shape
+            # that fits. Measured 2026-09-05: inline inside the seven-day block, the line went
+            # to 63 columns against a 60 ceiling, and it stayed at 62 after every shortening
+            # that kept the figure readable. A block is never folded in half (W6), so a block
+            # that cannot fit is a block that gets TRUNCATED — and on this status line
+            # truncated means gone, not ugly. As its own block it folds onto its own line on a
+            # narrow terminal, which is exactly what the folding machinery exists for.
+            # It carries the "7d" prefix because a bare "+29h" sitting after a separator could
+            # be mistaken for the five-hour figure, which is the one thing this must never be.
+            week_pace_block="${GRAY}7d ${T_PACE} ${_wp_c}${_wp_txt}${GRAY}"
+        fi
+    fi
+
     week_block="${GRAY}7d"
     if [ "$has_wreset" = true ]; then
         # The "/G" says how many days the 100% in hand really has to last: 7 normally, fewer
@@ -953,6 +1041,11 @@ EOF
         # two similar words for two different clocks is exactly how one gets mistaken for the
         # other. This is about usage limits, never about money.
         week_block="${week_block} · ${T_RESETS} $(fmt_dh $week_rem)"
+        # The percentage and the time live INSIDE ONE pair of brackets, separated by a
+        # middle dot: they are one fact in two units, and two adjacent bracket groups would
+        # read as two independent measurements. The colour of each half is its own, because
+        # they can honestly disagree - the percentage judges today against today's share,
+        # the time judges the whole remaining window.
         if [ "$over" = "1" ]; then
             week_block="${week_block} ${RED}(${T_OVER} ${balance}%)${GRAY}"
         else
@@ -1471,7 +1564,7 @@ _sep_w=7          # "   │   " on screen
 _indent="  "
 _cols=$(pk_cols)
 rate_info=""; _cur=""; _cur_w=0
-for blk in "$five_block" "$week_block" "$renew_block"; do
+for blk in "$five_block" "$week_block" "$week_pace_block" "$renew_block"; do
     [ -z "$blk" ] && continue
     _w=$(pk_visible "$blk")
     if [ -z "$_cur" ]; then
