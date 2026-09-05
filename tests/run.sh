@@ -100,6 +100,10 @@ PY
         "elif [ -n \"\$bmad_block\" ]; then
     rate_info=\"\${rate_info}\${sep}\${bmad_block}\${RESET}\""
 
+    prove_one "a machine with no bmad is worked for anyway" statusline.sh \
+        "if [ -n \"\$_bv_loop_have\" ] || [ -n \"\$_bv_man\" ] || command -v bmad-loop >/dev/null 2>&1; then" \
+        "if true; then"
+
     prove_one "the update notice stops being conditional" statusline.sh \
         "    if pk_newer \"\$_bv_loop_have\" \"\$_bv_loop_latest\"; then" \
         "    if true; then"
@@ -654,13 +658,36 @@ section "Updates available: shown only when there IS one"
 # into the fetched file, what is INSTALLED into the places the status line reads live.
 # No network is touched here, and none should ever be: a test that needs the internet
 # fails for reasons that have nothing to do with the code, and then gets switched off.
-plant_versions() {  # $1 home, $2 loop_installed, $3 loop_latest, $4 method_latest, $5 method_next
-    { printf 'stamp=%s\n' "$(date +%s)"
+plant_versions() {  # $1 home, $2 loop_installed, $3 loop_latest, $4 method_latest, $5 method_next, [$6 age_s]
+    { printf 'stamp=%s\n' "$(( $(date +%s) - ${6:-0} ))"
       printf 'loop_latest=%s\n' "$3"
       printf 'loop_installed=%s\n' "$2"
       printf 'method_latest=%s\n' "$4"
       printf 'method_next=%s\n' "$5"; } > "$1/.claude/bmad-versions"
 }
+# A FAKE fetcher: it touches the network never, and leaves one file behind saying it ran.
+# The real one is not usable in a test — it dials out — and a test that needs the internet
+# fails for reasons that have nothing to do with the code, and then gets switched off.
+# Wait for a file, up to $2 seconds, checking often. NEVER a fixed `sleep`: the fetch is
+# spawned detached, so how long it takes to land is the machine's business, not ours. A
+# fixed 0.3s wait made this suite report that macOS's system bash 3.2 does not spawn at
+# all — measured five times in each shell afterwards, it spawns 5/5 in both. A flaky test
+# that fails in the direction of "there is a defect" is worse than none: it was one step
+# from being written up as a portability bug that does not exist.
+wait_for() {  # $1 path, $2 seconds
+    local i=0 n=$(( ${2:-3} * 10 ))
+    while [ "$i" -lt "$n" ]; do
+        [ -e "$1" ] && return 0
+        sleep 0.1; i=$(( i + 1 ))
+    done
+    return 1
+}
+
+plant_fetcher() {  # $1 home
+    printf '#!/bin/sh\ntouch "%s/FETCHED"\n' "$1" > "$1/.claude/bmad-versions.sh"
+    chmod +x "$1/.claude/bmad-versions.sh"
+}
+
 # A project with BMAD Method installed at $3, and a payload whose cwd is $2 inside it.
 plant_project() {  # $1 home, $2 subdir under the project root ("" for the root), $3 version
     local root="$1/proj"
@@ -738,6 +765,51 @@ h=$(new_home); d=$(plant_project "$h" "" "6.11.0")
 render "$h" "$(payload_in "$d")"
 equals "U8  nothing fetched yet: two lines" "2"  "$NLINES"
 hasnt  "U8b and no empty brackets"          "()" "$OUT"; quiet "U8"
+
+# U11. 🔴 A MACHINE WITH NO BMAD AT ALL IS LEFT ALONE. Not a nicety: without this gate the
+# block walks directories on every redraw for somebody who has never heard of bmad, and —
+# far worse in a published program — reaches the NETWORK every half hour for a tool that is
+# not installed. PATH is cut down to the system directories so the author's own bmad-loop
+# cannot make this case pass by accident.
+# The file is planted DELIBERATELY STALE (a day old). With a fresh one the fetch would
+# not happen anyway, and U11c below would pass while proving nothing: the only thing that
+# may stop the dial-out here has to be the relevance gate itself.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "6.11.1-next.44" 86400
+plant_fetcher "$h"
+_pk_path=$PATH; PATH=/usr/bin:/bin
+render "$h" "$(payload_in "/tmp")"
+PATH=$_pk_path
+equals "U11 no bmad anywhere: two lines"  "2"  "$NLINES"
+hasnt  "U11b and nothing is announced"    "⬆"  "$OUT"
+# 🔴 AND THE FETCHER WAS NOT EVEN REACHED FOR. Checking the drawn output alone would pass
+# while the machine quietly dialled out every half hour for a tool it does not have — the
+# output looks identical either way. So a fake fetcher is planted, the cached file is a
+# day old so nothing ELSE could be holding the fetch back, and what is asserted is that it
+# left no trace of having run.
+# 🔴 It waits the FULL timeout, deliberately, and the same one the positive case below is
+# allowed: a negative that checks sooner than the positive needs would pass by being early.
+wait_for "$h/FETCHED" 3
+hasnt "U11c and the fetcher was never reached for" "yes" "$( [ -e "$h/FETCHED" ] && echo yes )"; quiet "U11"
+
+# U11d. The mirror, and without it the case above proves only that the fake never runs:
+# ON A RELEVANT MACHINE with a stale cache, the fetcher IS reached for.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44" 86400
+plant_fetcher "$h"; d=$(plant_project "$h" "" "6.12.0")
+_pk_path=$PATH; PATH=/usr/bin:/bin
+render "$h" "$(payload_in "$d")"
+PATH=$_pk_path
+wait_for "$h/FETCHED" 3
+has "U11d a relevant machine DOES refresh a stale cache" "yes" "$( [ -e "$h/FETCHED" ] && echo yes )"
+
+# U12. The same machine, but sitting inside a BMAD project: now it IS relevant, and the
+# per-project half must still work with no bmad-loop installed at all.
+h=$(new_home); plant_versions "$h" "" "0.12.0" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.11.0")
+_pk_path=$PATH; PATH=/usr/bin:/bin
+render "$h" "$(payload_in "$d")"
+PATH=$_pk_path
+has   "U12 a project alone makes it relevant" "bmad-method (6.12.0)" "$L3"
+hasnt "U12b and an uninstalled loop stays quiet" "bmad-loop" "$L3"
 
 # U9. The manifest is found by walking UP: a session sitting three directories inside the
 # project is still in that project.

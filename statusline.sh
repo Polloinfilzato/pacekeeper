@@ -958,7 +958,29 @@ fi
 # project on `next` compared against `latest` is told to move to a version that is not on
 # its channel, every single redraw, for ever. The channel is chosen by what is INSTALLED.
 bmad_upd=""
+_bv_loop_have=""
+_bv_man=""
 if ! pk_off bmad; then
+    # WHO THIS BLOCK IS FOR, established BEFORE anything is read or fetched. The run block
+    # above is gated on `command -v bmad-loop`; this one cannot be, because BMAD Method is
+    # a per-project install that does not imply the loop. But the mirror of that is that
+    # neither may it run for somebody who has NEITHER: on a machine with no bmad at all it
+    # would walk directories on every redraw and, worse, reach the NETWORK every half hour
+    # for a tool that is not installed. So relevance is decided first, from two local and
+    # free facts, and everything else hangs off it.
+    for _d in "$HOME"/.local/share/uv/tools/bmad-loop/lib/python*/site-packages/bmad_loop-*.dist-info; do
+        [ -d "$_d" ] || continue
+        _bv_loop_have=${_d##*/bmad_loop-}; _bv_loop_have=${_bv_loop_have%.dist-info}
+    done
+    # Bounded to eight levels: an unbounded walk from a directory that is not in a project
+    # climbs to / on every single redraw, and it would do it silently.
+    _bv_dir=$cwd; _bv_hops=0
+    while [ "$_bv_hops" -lt 8 ] && [ -n "$_bv_dir" ] && [ "$_bv_dir" != "/" ]; do
+        if [ -r "$_bv_dir/_bmad/_config/manifest.yaml" ]; then _bv_man="$_bv_dir/_bmad/_config/manifest.yaml"; break; fi
+        _bv_dir=${_bv_dir%/*}; _bv_hops=$(( _bv_hops + 1 ))
+    done
+fi
+if [ -n "$_bv_loop_have" ] || [ -n "$_bv_man" ] || command -v bmad-loop >/dev/null 2>&1; then
     _bv_file="$HOME/.claude/bmad-versions"
     _bv_stamp=0; _bv_loop_latest=""; _bv_loop_inst=""; _bv_m_latest=""; _bv_m_next=""
     if [ -r "$_bv_file" ]; then
@@ -1010,25 +1032,13 @@ if ! pk_off bmad; then
         }'
     }
 
-    # --- bmad-loop: the installed version from uv's tool tree, no process ---
-    _bv_loop_have=""
-    for _d in "$HOME"/.local/share/uv/tools/bmad-loop/lib/python*/site-packages/bmad_loop-*.dist-info; do
-        [ -d "$_d" ] || continue
-        _bv_loop_have=${_d##*/bmad_loop-}; _bv_loop_have=${_bv_loop_have%.dist-info}
-    done
+    # --- bmad-loop: installed version already read above, no process ---
     [ -z "$_bv_loop_have" ] && _bv_loop_have=$_bv_loop_inst
     if pk_newer "$_bv_loop_have" "$_bv_loop_latest"; then
         bmad_upd="bmad-loop (${_bv_loop_latest})"
     fi
 
-    # --- BMAD Method: per project, walking up from the session's directory ---
-    # Bounded to eight levels: an unbounded walk on a path that is not in a project climbs
-    # to / on every single redraw, and it would do it silently.
-    _bv_dir=$cwd; _bv_hops=0; _bv_man=""
-    while [ "$_bv_hops" -lt 8 ] && [ -n "$_bv_dir" ] && [ "$_bv_dir" != "/" ]; do
-        if [ -r "$_bv_dir/_bmad/_config/manifest.yaml" ]; then _bv_man="$_bv_dir/_bmad/_config/manifest.yaml"; break; fi
-        _bv_dir=${_bv_dir%/*}; _bv_hops=$(( _bv_hops + 1 ))
-    done
+    # --- BMAD Method: per project, from the manifest located above ---
     if [ -n "$_bv_man" ]; then
         # The FIRST `version:` under `installation:`, not any of the per-module ones that
         # follow it: those are the same number today and are free to diverge tomorrow.
