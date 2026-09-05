@@ -86,6 +86,35 @@ if [ "${SELFTEST:-0}" = 1 ]; then
     exit 0
 fi
 
+# 🔴 AN ATOMIC LEASE, TAKEN BY THE FETCHER ITSELF. The status line rate-limits its spawns
+# with a timestamp file, which is a rate limiter and not a lock: several terminals reading
+# the same old stamp in the same second all spawn. That alone is harmless — the writes are
+# atomic — but a HUNG fetcher is not waited on, so a long network outage quietly stacks up
+# detached `gh` and `npm` processes. `mkdir` is the one filesystem operation that is atomic
+# everywhere: exactly one caller creates it, the rest exit immediately having done nothing.
+# A lease older than ten minutes belonged to something that died and is taken over.
+LEASE="${OUT}.lease"
+if ! mkdir "$LEASE" 2>/dev/null; then
+    _lts=0
+    [ -r "$LEASE/ts" ] && read -r _lts < "$LEASE/ts" 2>/dev/null
+    case "$_lts" in ''|*[!0-9]*) _lts=0 ;; esac
+    if [ $(( $(date +%s) - _lts )) -lt 600 ]; then
+        exit 0                      # somebody else is already asking; not an error
+    fi
+    rm -rf "$LEASE" 2>/dev/null
+    mkdir "$LEASE" 2>/dev/null || exit 0
+fi
+printf '%s\n' "$(date +%s)" > "$LEASE/ts" 2>/dev/null
+trap 'rm -rf "$LEASE" 2>/dev/null' EXIT INT TERM
+
+# EVERY network call gets a deadline. curl had one from the start; `gh` and `npm` did not,
+# and an uncapped call is exactly how a detached process becomes a permanent one. `timeout`
+# is not on macOS by default, so the cap is applied with whatever exists and the call is
+# simply made without one where nothing does — the lease above still bounds the damage.
+CAP=""
+if command -v timeout >/dev/null 2>&1; then CAP="timeout $NET_TIMEOUT"
+elif command -v gtimeout >/dev/null 2>&1; then CAP="gtimeout $NET_TIMEOUT"; fi
+
 loop_latest=""; method_latest=""; method_next=""; loop_installed=""
 
 # --- bmad-loop: upstream's newest RELEASE tag ---------------------------------------
@@ -93,7 +122,7 @@ loop_latest=""; method_latest=""; method_next=""; loop_installed=""
 # uselessness; plain curl as the fallback, so a machine without `gh` still gets the
 # number. Neither is required: with both missing the block simply never mentions the loop.
 if command -v gh >/dev/null 2>&1; then
-    loop_latest=$(tag_to_version "$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name 2>/dev/null)")
+    loop_latest=$(tag_to_version "$($CAP gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name 2>/dev/null)")
 fi
 if [ -z "$loop_latest" ] && command -v curl >/dev/null 2>&1; then
     loop_latest=$(tag_to_version "$(curl -fsSL --max-time "$NET_TIMEOUT" \
@@ -103,7 +132,7 @@ fi
 
 # --- BMAD Method: both npm channels --------------------------------------------------
 if command -v npm >/dev/null 2>&1; then
-    _tags=$(npm view "$NPM_PKG" dist-tags --json 2>/dev/null)
+    _tags=$($CAP npm view "$NPM_PKG" dist-tags --json 2>/dev/null)
     method_latest=$(tag_to_version "$(printf '%s' "$_tags" | sed -n 's/.*"latest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)")
     method_next=$(tag_to_version   "$(printf '%s' "$_tags" | sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'   | head -n1)")
 fi
@@ -111,6 +140,25 @@ fi
 # --- the fallback reading of the INSTALLED loop --------------------------------------
 if command -v bmad-loop >/dev/null 2>&1; then
     loop_installed=$(tag_to_version "$(bmad-loop --version 2>/dev/null | awk '{print $NF}')")
+fi
+
+# 🔴 A CHANNEL THAT DID NOT ANSWER KEEPS THE VALUE IT HAD, and the first version of this
+# did the opposite: with GitHub down and npm up it wrote an EMPTY `loop_latest` next to a
+# brand new stamp, so a real bmad-loop update stayed hidden for the six hours until the
+# cache aged out — and the status line had no way to tell "there is nothing newer" from
+# "nobody could ask". Each field falls back to what is already on disk, individually.
+if [ -r "$OUT" ]; then
+    _p_loop=""; _p_m_latest=""; _p_m_next=""
+    while IFS='=' read -r _k _v; do
+        case "$_k" in
+            loop_latest)   _p_loop=$_v ;;
+            method_latest) _p_m_latest=$_v ;;
+            method_next)   _p_m_next=$_v ;;
+        esac
+    done < "$OUT"
+    [ -z "$loop_latest" ]   && loop_latest=$(tag_to_version "$_p_loop")
+    [ -z "$method_latest" ] && method_latest=$(tag_to_version "$_p_m_latest")
+    [ -z "$method_next" ]   && method_next=$(tag_to_version "$_p_m_next")
 fi
 
 if [ -z "$loop_latest" ] && [ -z "$method_latest" ] && [ -z "$method_next" ]; then

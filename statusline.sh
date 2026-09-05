@@ -161,6 +161,38 @@ GIT_CACHE_TTL=6
 # per user, but the suffix costs nothing and makes it true everywhere.
 cache_dir="${TMPDIR:-/tmp}/cc-statusline-cache-$(id -u 2>/dev/null || echo 0)"
 
+# 🔴 AND THE NAME BEING PREDICTABLE IS THE PROBLEM, not the collision it was written for.
+# Raised by an adversarial review on 2026-09-05. On a machine where TMPDIR is unset — the
+# ordinary case on Linux — that path is in world-writable /tmp and ANY local user can guess
+# it. Create it first, and every file this script writes there can be a symlink of their
+# choosing: the status line follows it and truncates whatever the victim can write.
+#
+# So the directory is established ONCE, here, and it is repaired at the source rather than
+# one file at a time: every cache in this program benefits, not just the newest one.
+#   - created with mode 700 AT CREATION (`mkdir -m`), never created then chmod'ed: between
+#     those two steps the directory is open, and that gap is the whole attack.
+#   - if it already exists it has to be a real directory, NOT A SYMLINK, and owned by US.
+#     `umask 077` protects a directory we made; it does nothing about one already sitting
+#     there under somebody else's name.
+#   - failing that we do not go without caching, and we do not write into it either: we
+#     move to a private directory inside the user's own home, which is theirs by
+#     definition. Caching is a speed feature; it is not worth a foothold.
+pk_dir_is_ours() {
+    [ -d "$1" ] || return 1
+    [ -L "$1" ] && return 1
+    # -O is "owned by the effective user" in test(1); portable across bash 3.2 and 5.
+    [ -O "$1" ] || return 1
+    return 0
+}
+if [ -e "$cache_dir" ] || [ -L "$cache_dir" ]; then
+    pk_dir_is_ours "$cache_dir" || cache_dir="$HOME/.claude/statusline-cache"
+else
+    mkdir -m 700 -p "$cache_dir" 2>/dev/null || cache_dir="$HOME/.claude/statusline-cache"
+fi
+if [ "$cache_dir" = "$HOME/.claude/statusline-cache" ] && [ ! -d "$cache_dir" ]; then
+    mkdir -m 700 -p "$cache_dir" 2>/dev/null || true
+fi
+
 # --- User configuration ---
 # One file, read once, with a `sed` over a handful of lines: cheaper than a read per key
 # scattered through the script. Every key is optional - with no file at all the script
@@ -485,7 +517,7 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         _rl_locked=no
     }
     _rl_write=yes
-    _rl_old=""; _rl_o7p=""; _rl_o7r=""; _rl_o5=""
+    _rl_old=""; _rl_o7p=""; _rl_o7r=""; _rl_o5=""; _rl_o5p=""
     _rl_fresh=no          # la nostra fotografia e' almeno fresca quanto quella su disco?
     _wp_int=${week_pct%%.*}                    # il server manda anche "14.000000000000002"
     [ -f "$HOME/.claude/rate-limits.json" ] &&
@@ -494,6 +526,8 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         _rl_o5=${_rl_old#*\"five_hour_resets_at\":\"}; _rl_o5=${_rl_o5%%\"*}
         _rl_o7p=${_rl_old#*\"seven_day_used_pct\":\"}; _rl_o7p=${_rl_o7p%%\"*}
         _rl_o7p=${_rl_o7p%%.*}
+        _rl_o5p=${_rl_old#*\"five_hour_used_pct\":\"}; _rl_o5p=${_rl_o5p%%\"*}
+        pk_pct "$_rl_o5p" || _rl_o5p=""     # someone else's file: a value, not a promise
         _rl_o7r=${_rl_old#*\"seven_day_resets_at\":\"}; _rl_o7r=${_rl_o7r%%\"*}
         # A shared file whose window has already expired has no say: anyone replaces it.
         if [ "$_rl_o5" -gt "$_rl_now" ] 2>/dev/null; then
@@ -514,6 +548,18 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
             elif [ "$five_reset" -eq "$_rl_o5" ] 2>/dev/null \
                  && [ "$_wp_int" -lt "$_rl_o7p" ] 2>/dev/null; then
                 _rl_write=no                       # stessa finestra, ma qualcuno ha visto consumare di piu'
+            elif [ "$five_reset" -eq "$_rl_o5" ] 2>/dev/null \
+                 && [ "${_rl_o5p:-}" != "" ] \
+                 && awk -v a="$five_pct" -v b="$_rl_o5p" 'BEGIN{ exit !(a < b) }' 2>/dev/null; then
+                # 🔴 THE FIVE-HOUR PERCENTAGE DECIDES TOO, and leaving it out is what made the
+                # shared number BOUNCE. Measured 2026-09-05 over 45 minutes inside one window:
+                # 49, 52, 51, 49, 54, 49, 55, 49, 56. The weekly percentage above is a coarse
+                # integer, so most sessions TIE on it, and a tie handed the file to whoever
+                # redrew last - including a session idle for half an hour, publishing the
+                # snapshot it was handed at its own last API call. Consumption cannot fall
+                # inside a window, so a LOWER five-hour reading is simply an older one, and it
+                # must not win. This is the finer-grained tiebreak the weekly integer cannot be.
+                _rl_write=no
             else
                 _rl_fresh=yes
             fi
@@ -666,6 +712,52 @@ pick_color() {
         *) printf '%s' "$GIT_GREEN" ;;
     esac
 }
+
+# --- THE FIVE-HOUR READING IS SHARED BETWEEN EVERY SESSION ---
+# Asked for by Ema on 2026-09-05, and this is the answer he preferred rather than the
+# fallback he offered: not "show the parenthesis only in the most recent session", but
+# EVERY session showing the freshest number any of them has seen.
+#
+# THE PROBLEM. Claude Code hands each session its OWN snapshot of the rate limits, taken
+# at THAT session's last API call. A terminal left alone for forty minutes redraws a
+# forty-minute-old percentage, so the same account shows a different `(-12m)` in every
+# window, and the oldest session is the most wrong.
+#
+# WHY THIS IS SOUND, and it rests on one fact rather than on a clock: WITHIN ONE WINDOW
+# CONSUMPTION CANNOT FALL. So among snapshots that name the same `five_hour_resets_at`,
+# the HIGHEST percentage is necessarily the most recent one. No timestamps to compare, no
+# daemon, no clock skew to reason about - the ordering is in the data.
+#
+# So each session publishes its snapshot to the shared file (above, under a lock), and
+# here each session ADOPTS the shared value whenever it is ahead of its own. An idle
+# terminal shows what the working one has just seen.
+#
+# WHAT THIS HONESTLY IS NOT: the true current consumption. It is the freshest reading
+# ANY session has been handed. With every session idle, everybody agrees on the same
+# slightly old number - which is still strictly better than everybody disagreeing, and is
+# the best obtainable: nothing on this machine knows the account's usage except through a
+# snapshot handed to some session.
+#
+# The COUNTDOWN is unaffected either way: `five_reset` is a wall-clock deadline shared by
+# the whole account, so the pace keeps moving correctly even while a percentage sits still.
+if [ -n "$five_reset" ] && [ "$five_reset" != "null" ] \
+   && [ -f "$HOME/.claude/rate-limits.json" ]; then
+    _sh_line=""
+    read -r _sh_line < "$HOME/.claude/rate-limits.json" 2>/dev/null || _sh_line=""
+    if [ -n "$_sh_line" ] && [ "${_sh_line#*\"five_hour_resets_at\":\"}" != "$_sh_line" ]; then
+        _sh_r=${_sh_line#*\"five_hour_resets_at\":\"}; _sh_r=${_sh_r%%\"*}
+        _sh_p=${_sh_line#*\"five_hour_used_pct\":\"}; _sh_p=${_sh_p%%\"*}
+        # Someone else's file. Both fields are validated before either is believed, and a
+        # window that does not match ours is simply not ours to learn from.
+        if pk_pct "$_sh_p" && [ "$_sh_r" = "$five_reset" ] 2>/dev/null; then
+            if [ -z "$five_pct" ]; then
+                five_pct=$_sh_p
+            elif awk -v a="$five_pct" -v b="$_sh_p" 'BEGIN{ exit !(b > a) }'; then
+                five_pct=$_sh_p
+            fi
+        fi
+    fi
+fi
 
 # The 5-hour block
 # THE COUNTDOWN DOES NOT DEPEND ON THE PERCENTAGE, and that is the whole point of the
@@ -968,29 +1060,54 @@ if ! pk_off bmad; then
     # would walk directories on every redraw and, worse, reach the NETWORK every half hour
     # for a tool that is not installed. So relevance is decided first, from two local and
     # free facts, and everything else hangs off it.
+    # A directory NAME is input too: it is printed, and a directory can be called anything.
+    # The last match wins, and with a well-formed uv tree there is exactly one.
     for _d in "$HOME"/.local/share/uv/tools/bmad-loop/lib/python*/site-packages/bmad_loop-*.dist-info; do
         [ -d "$_d" ] || continue
-        _bv_loop_have=${_d##*/bmad_loop-}; _bv_loop_have=${_bv_loop_have%.dist-info}
+        _bv_c=${_d##*/bmad_loop-}; _bv_c=${_bv_c%.dist-info}
+        case "$_bv_c" in ''|*[!0-9A-Za-z._-]*) continue ;; esac
+        _bv_loop_have=$_bv_c
     done
-    # Bounded to eight levels: an unbounded walk from a directory that is not in a project
-    # climbs to / on every single redraw, and it would do it silently.
-    _bv_dir=$cwd; _bv_hops=0
-    while [ "$_bv_hops" -lt 8 ] && [ -n "$_bv_dir" ] && [ "$_bv_dir" != "/" ]; do
+    # Bounded, because an unbounded walk from a directory that is not in a project climbs
+    # to / on every single redraw and does it silently. Three corrections over the first
+    # version, all of them found by review rather than by use:
+    #   - EIGHT WAS TOO FEW and failed in the direction of silence: a project root nine
+    #     levels above the session's directory was simply never seen, and the user got no
+    #     notice with no hint why. The walk stops at the FIRST hit, so a larger bound costs
+    #     nothing whenever there is something to find, and only bounds the hopeless case.
+    #   - A RELATIVE PATH SPUN IN PLACE: `${d%/*}` on `src` yields `src` again, so the loop
+    #     tested the same directory to exhaustion. It now stops the moment a hop stops
+    #     shortening the path, which covers a bare name and `/` alike.
+    #   - Only an ABSOLUTE path is walked at all. Claude Code hands us one; anything else
+    #     is not a path we can resolve without guessing the working directory.
+    case "$cwd" in /*) _bv_dir=$cwd ;; *) _bv_dir="" ;; esac
+    _bv_hops=0
+    while [ -n "$_bv_dir" ] && [ "$_bv_hops" -lt 24 ]; do
         if [ -r "$_bv_dir/_bmad/_config/manifest.yaml" ]; then _bv_man="$_bv_dir/_bmad/_config/manifest.yaml"; break; fi
-        _bv_dir=${_bv_dir%/*}; _bv_hops=$(( _bv_hops + 1 ))
+        _bv_up=${_bv_dir%/*}
+        [ "$_bv_up" = "$_bv_dir" ] && break        # no slash left: nothing above this
+        _bv_dir=$_bv_up; _bv_hops=$(( _bv_hops + 1 ))
     done
 fi
 if [ -n "$_bv_loop_have" ] || [ -n "$_bv_man" ] || command -v bmad-loop >/dev/null 2>&1; then
     _bv_file="$HOME/.claude/bmad-versions"
     _bv_stamp=0; _bv_loop_latest=""; _bv_loop_inst=""; _bv_m_latest=""; _bv_m_next=""
     if [ -r "$_bv_file" ]; then
+        # 🔴 EVERY VALUE IS FILTERED BEFORE IT IS BELIEVED, because every one of them is
+        # PRINTED ONTO THE TERMINAL. A version string is digits, letters, dot, dash and
+        # underscore; anything else is dropped whole. Without this, a crafted entry such as
+        # `loop_latest=2.0.0<ESC>]52;c;…<BEL>` compares as newer and emits an OSC 52
+        # clipboard sequence on every single redraw. It never reaches a shell — but a
+        # terminal escape is not a lesser thing than a shell escape when it is repeated
+        # eight times a minute. The file is ours to write and anybody's to tamper with.
+        _bv_clean() { case "$1" in ''|*[!0-9A-Za-z._-]*) printf '' ;; *) printf '%s' "$1" ;; esac; }
         while IFS='=' read -r _k _v; do
             case "$_k" in
-                stamp)          _bv_stamp=$_v ;;
-                loop_latest)    _bv_loop_latest=$_v ;;
-                loop_installed) _bv_loop_inst=$_v ;;
-                method_latest)  _bv_m_latest=$_v ;;
-                method_next)    _bv_m_next=$_v ;;
+                stamp)          _bv_stamp=$(_bv_clean "$_v") ;;
+                loop_latest)    _bv_loop_latest=$(_bv_clean "$_v") ;;
+                loop_installed) _bv_loop_inst=$(_bv_clean "$_v") ;;
+                method_latest)  _bv_m_latest=$(_bv_clean "$_v") ;;
+                method_next)    _bv_m_next=$(_bv_clean "$_v") ;;
             esac
         done < "$_bv_file"
     fi
@@ -1013,14 +1130,26 @@ if [ -n "$_bv_loop_have" ] || [ -n "$_bv_man" ] || command -v bmad-loop >/dev/nu
         fi
     fi
 
-    # Is `b` newer than `a`? Numbers only, in order, missing parts count as zero:
-    # `6.11.1-next.44` becomes 6·11·1·44. The two are only ever compared WITHIN one
-    # channel, so a prerelease is never weighed against its own final release - which is
-    # the one place this simplification would answer backwards.
+    # Is `b` newer than `a`?
+    #
+    # 🔴 THE RELEASE AND THE PRERELEASE ARE SPLIT APART, and the first version of this did
+    # not do it. It compared digits in order, so `6.0.0-Beta.8` became 6·0·0·8 and
+    # `6.0.0` became 6·0·0 - and it answered that the STABLE RELEASE IS NOT NEWER than
+    # the beta that preceded it. Those are not invented versions: bmad-method published
+    # `6.0.0-Beta.0` through `6.0.0-Beta.8` and then `6.0.0`, all of them on npm today. A
+    # project sitting on the beta would have been told, for ever, that it was up to date.
+    #
+    # So: compare the release parts numerically; on a tie, a version WITH a prerelease is
+    # LOWER than the same version without one, which is the semver rule and also plain
+    # sense - a beta comes before what it is a beta of. Two prereleases of the same release
+    # compare on their own numbers, then lexically.
     pk_newer() {
         [ -n "$1" ] && [ -n "$2" ] || return 1
         awk -v a="$1" -v b="$2" 'BEGIN{
-            n = split(a, x, /[^0-9]+/); m = split(b, y, /[^0-9]+/)
+            sub(/^[vV]/, "", a); sub(/^[vV]/, "", b)   # a tag may carry a leading v
+            ai = index(a, "-"); ar = ai ? substr(a, 1, ai-1) : a; ap = ai ? substr(a, ai+1) : ""
+            bi = index(b, "-"); br = bi ? substr(b, 1, bi-1) : b; bp = bi ? substr(b, bi+1) : ""
+            n = split(ar, x, /[^0-9]+/); m = split(br, y, /[^0-9]+/)
             k = (n > m) ? n : m
             for (i = 1; i <= k; i++) {
                 p = (i <= n && x[i] != "") ? x[i] + 0 : 0
@@ -1028,7 +1157,18 @@ if [ -n "$_bv_loop_have" ] || [ -n "$_bv_man" ] || command -v bmad-loop >/dev/nu
                 if (q > p) exit 0
                 if (q < p) exit 1
             }
-            exit 1
+            if (ap != "" && bp == "") exit 0      # 6.0.0-Beta.8 -> 6.0.0 : newer
+            if (ap == "" && bp != "") exit 1      # 6.0.0 -> 6.0.0-Beta.8 : older
+            if (ap == "" && bp == "") exit 1      # the same version
+            n = split(ap, x, /[^0-9]+/); m = split(bp, y, /[^0-9]+/)
+            k = (n > m) ? n : m
+            for (i = 1; i <= k; i++) {
+                p = (i <= n && x[i] != "") ? x[i] + 0 : 0
+                q = (i <= m && y[i] != "") ? y[i] + 0 : 0
+                if (q > p) exit 0
+                if (q < p) exit 1
+            }
+            exit (bp > ap) ? 0 : 1
         }'
     }
 
@@ -1043,11 +1183,29 @@ if [ -n "$_bv_loop_have" ] || [ -n "$_bv_man" ] || command -v bmad-loop >/dev/nu
         # The FIRST `version:` under `installation:`, not any of the per-module ones that
         # follow it: those are the same number today and are free to diverge tomorrow.
         _bv_m_have=$(awk '/^installation:/{f=1; next} f && /^[[:space:]]+version:/{gsub(/[[:space:]"]/,"",$2); print $2; exit} f && /^[^[:space:]]/{exit}' "$_bv_man" 2>/dev/null)
+        # 🔴 "A HYPHEN MEANS THE `next` CHANNEL" IS FALSE, and the first version of this
+        # believed it. bmad-method has published prereleases under `latest` - the whole
+        # `6.0.0-Beta.*` series - so a project on `6.0.0-Beta.8` was classified as `next`
+        # purely because of the hyphen, and then offered nothing at all when `next` was
+        # empty, while the stable `6.0.0` sat there unmentioned.
+        #
+        # What holds instead, without guessing a channel: a STABLE install is only ever
+        # offered `latest`, because nagging somebody onto a prerelease is the one direction
+        # that is never safe. A PRERELEASE install is offered whichever of the two channels
+        # is genuinely newer than what it has, and the greater one when both are.
+        _bv_m_want=""
         case "$_bv_m_have" in
-            *-*) _bv_m_want=$_bv_m_next ;;    # a prerelease is compared against `next`
-            *)   _bv_m_want=$_bv_m_latest ;;
+            *-*)
+                pk_newer "$_bv_m_have" "$_bv_m_latest" && _bv_m_want=$_bv_m_latest
+                if pk_newer "$_bv_m_have" "$_bv_m_next"; then
+                    if [ -z "$_bv_m_want" ] || pk_newer "$_bv_m_want" "$_bv_m_next"; then
+                        _bv_m_want=$_bv_m_next
+                    fi
+                fi
+                ;;
+            *)  pk_newer "$_bv_m_have" "$_bv_m_latest" && _bv_m_want=$_bv_m_latest ;;
         esac
-        if pk_newer "$_bv_m_have" "$_bv_m_want"; then
+        if [ -n "$_bv_m_want" ]; then
             [ -n "$bmad_upd" ] && bmad_upd="${bmad_upd} · "
             bmad_upd="${bmad_upd}bmad-method (${_bv_m_want})"
         fi

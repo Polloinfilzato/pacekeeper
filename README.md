@@ -204,6 +204,29 @@ finding it, including the exact prompt to hand to Claude Code so it can look it 
 The countdown knows the *instant*, not just the day: a subscription that renewed at 15:41 stops
 saying "today" at 15:41, not at midnight.
 
+### One five-hour reading, shared by every session
+
+Claude Code hands **each session its own snapshot** of the rate limits, taken at that
+session's last API call. A terminal left alone for forty minutes therefore draws a
+forty-minute-old percentage: the same account shows a different `5h left …` and a different
+pace in every window, and the oldest session is the most wrong.
+
+Every session publishes its snapshot to the shared file, and every session **adopts the
+shared value whenever it is ahead of its own**. An idle terminal shows what the working one
+has just seen.
+
+The ordering does not come from a clock, which is what makes it safe: **within one window
+consumption cannot fall**, so among snapshots naming the same `five_hour_resets_at` the
+highest percentage is necessarily the most recent. No timestamps to compare, no daemon, no
+clock skew to reason about.
+
+What it honestly is not: the true current consumption. It is the freshest reading *any*
+session has been handed. With everything idle, all windows agree on the same slightly old
+number — still strictly better than all of them disagreeing, and the best obtainable:
+nothing on the machine knows the account's usage except through a snapshot given to a
+session. The countdown is unaffected either way, because the reset is a wall-clock deadline
+shared by the whole account.
+
 ### Line 3 — the bmad-loop run
 
 For users of [bmad-loop](https://pypi.org/project/bmad-loop/), the unattended story-runner.
@@ -353,7 +376,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.0.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.1.0/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard

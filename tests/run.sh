@@ -104,13 +104,25 @@ PY
         "if [ -n \"\$_bv_loop_have\" ] || [ -n \"\$_bv_man\" ] || command -v bmad-loop >/dev/null 2>&1; then" \
         "if true; then"
 
+    prove_one "an idle session goes back to its own stale reading" statusline.sh \
+        "            elif awk -v a=\"\$five_pct\" -v b=\"\$_sh_p\" 'BEGIN{ exit !(b > a) }'; then" \
+        "            elif false; then"
+
+    prove_one "the shared number is allowed to bounce again" statusline.sh \
+        "                 && awk -v a=\"\$five_pct\" -v b=\"\$_rl_o5p\" 'BEGIN{ exit !(a < b) }' 2>/dev/null; then" \
+        "                 && false; then"
+
     prove_one "the update notice stops being conditional" statusline.sh \
         "    if pk_newer \"\$_bv_loop_have\" \"\$_bv_loop_latest\"; then" \
         "    if true; then"
 
-    prove_one "a prerelease project is pointed at the stable channel" statusline.sh \
-        "            *-*) _bv_m_want=\$_bv_m_next ;;    # a prerelease is compared against \`next\`" \
-        "            *-*) _bv_m_want=\$_bv_m_latest ;;"
+    prove_one "the channel is guessed from a hyphen again" statusline.sh \
+        "                pk_newer \"\$_bv_m_have\" \"\$_bv_m_latest\" && _bv_m_want=\$_bv_m_latest" \
+        "                :"
+
+    prove_one "a prerelease outranks its own final release again" statusline.sh \
+        "            if (ap != \"\" && bp == \"\") exit 0      # 6.0.0-Beta.8 -> 6.0.0 : newer" \
+        "            if (ap != \"\" && bp == \"\") exit 1"
 
     prove_one "the module version is read instead of the installation one" statusline.sh \
         "        _bv_m_have=\$(awk '/^installation:/{f=1; next} f && /^[[:space:]]+version:/{gsub(/[[:space:]\"]/,\"\",\$2); print \$2; exit} f && /^[^[:space:]]/{exit}' \"\$_bv_man\" 2>/dev/null)" \
@@ -651,6 +663,64 @@ equals "B9  no run, no third line"                 "2"        "$NLINES"
 equals "B10 and line 3 is empty"                   ""         "$L3"
 quiet  "B11"
 
+# ================== 9b. one five-hour reading, shared by every session
+section "The five-hour reading is shared between sessions"
+
+# The shared file as another session would have left it. $2 percentage, $3 reset stamp.
+plant_shared() {
+    printf '{"stamp":%s,"five_hour_used_pct":"%s","seven_day_used_pct":"5","five_hour_resets_at":"%s","seven_day_resets_at":"%s","session_id":"other"}\n' \
+        "$(date +%s)" "$2" "$3" "$(( $(date +%s) + 300000 ))" > "$1/.claude/rate-limits.json"
+}
+
+# S1. THE CASE THIS EXISTS FOR: our own snapshot is stale (20% used) because this terminal
+# has been idle, while a working session has already seen 55%. Same window, so consumption
+# cannot have fallen: 55 is simply the more recent reading, and we show it.
+h=$(new_home); _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "55" "$_r5"
+render "$h" "$(payload 20 41.2 "$_r5")"
+has   "S1  an idle session adopts the fresher reading" "5h left 45%" "$L2"
+hasnt "S1b and not its own stale one"                  "5h left 80%" "$L2"; quiet "S1"
+
+# S2. A shared file from a DIFFERENT five-hour window says nothing about ours.
+h=$(new_home); _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "55" "$(( _r5 + 9999 ))"
+render "$h" "$(payload 20 41.2 "$_r5")"
+has "S2  another window is not ours to learn from" "5h left 80%" "$L2"
+
+# S3. A LOWER shared reading is an OLDER one, never a refund: we keep ours.
+h=$(new_home); _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "10" "$_r5"
+render "$h" "$(payload 60 41.2 "$_r5")"
+has "S3  a lower shared reading never wins" "5h left 40%" "$L2"
+
+# S4. The shared file is written by another process: a value, not a promise.
+h=$(new_home); _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "not-a-number" "$_r5"
+render "$h" "$(payload 20 41.2 "$_r5")"
+has "S4  a malformed shared value is dropped" "5h left 80%" "$L2"; quiet "S4"
+
+# S5/S6 need PUBLISHING ON, and saying so out loud matters: with it off nothing is
+# written at all, and S5 — which asserts the file did NOT change — would pass while
+# testing nothing whatsoever. S6 is the case that caught exactly that.
+
+# S5. 🔴 THE PUBLISHING HALF, and the one that stops the shared number BOUNCING: a session
+# holding a LOWER five-hour reading must not overwrite a higher one in the same window.
+# Before this, the weekly integer was the only tiebreak, sessions tied on it constantly,
+# and the tie went to whoever redrew last — an idle terminal included.
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"; _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "55" "$_r5"
+render "$h" "$(payload 20 5 "$_r5")"
+_after=$(sed -n 's/.*"five_hour_used_pct":"\([^"]*\)".*/\1/p' "$h/.claude/rate-limits.json")
+equals "S5  a staler session does not overwrite the shared file" "55" "$_after"
+
+# S6. The mirror: a session that HAS seen more does publish it, or the file would freeze
+# at the first value anybody ever wrote.
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"; _r5=$(( $(date +%s) + 7000 ))
+plant_shared "$h" "20" "$_r5"
+render "$h" "$(payload 61 5 "$_r5")"
+_after=$(sed -n 's/.*"five_hour_used_pct":"\([^"]*\)".*/\1/p' "$h/.claude/rate-limits.json")
+equals "S6  a fresher session does publish" "61" "$_after"
+
 # ================================ 10. updates available for bmad-loop / BMAD Method
 section "Updates available: shown only when there IS one"
 
@@ -743,14 +813,40 @@ has    "U5  the run is still there"        "bmad 7-4"           "$L3"
 has    "U5b and the update joins it"       "bmad-loop (0.12.0)" "$L3"
 equals "U5c without costing a fourth line" "3"                  "$NLINES"
 
-# U6. 🔴 THE CHANNEL. A project on a prerelease is compared against `next`, never against
-# `latest`: pointed at `latest` it would be told, on every redraw for ever, to move to a
-# version that is not on its channel.
+# U6. 🔴 THE CHANNEL — and this expectation was REVERSED on 2026-09-05, so the reason is
+# written down rather than left as a number somebody adjusted. The original rule was "a
+# hyphen means the `next` channel", and an adversarial review showed it false: bmad-method
+# published its whole `6.0.0-Beta.*` series under `latest`. The rule now is that a
+# prerelease install is offered whichever channel is genuinely newer, and the GREATER one
+# when both are — so a project two minor versions behind the stable line hears about the
+# stable line, instead of being kept inside a channel it was only guessed into.
 h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
 d=$(plant_project "$h" "" "6.10.1-next.12")
 render "$h" "$(payload_in "$d")"
-has    'U6  a prerelease project is offered next' "(6.11.1-next.44)" "$L3"
-hasnt  'U6b and never latest' "(6.12.0)" "$L3"
+has    'U6  a prerelease project is offered the greater of the two' "(6.12.0)" "$L3"
+hasnt  'U6b not the lesser one merely for sharing its channel' "(6.11.1-next.44)" "$L3"
+
+# U6c. When `next` really is ahead, a prerelease install is offered `next`.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.10.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.10.1-next.12")
+render "$h" "$(payload_in "$d")"
+has 'U6c and next when next is the greater' "(6.11.1-next.44)" "$L3"
+
+# U6d. 🔴 THE CASE THE OLD RULE GOT WRONG, with versions bmad-method actually published:
+# installed `6.0.0-Beta.8`, stable `6.0.0` out, no `next` tag at all. The old rule saw a
+# hyphen, looked only at an empty `next`, and said nothing — leaving the project on a beta
+# for ever while its own final release sat there.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.0.0" ""
+d=$(plant_project "$h" "" "6.0.0-Beta.8")
+render "$h" "$(payload_in "$d")"
+has 'U6d a beta is offered its own final release' "(6.0.0)" "$L3"
+
+# U6e. The direction that is never safe: a STABLE install is never nudged onto a
+# prerelease, however much greater its number looks.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.13.0-next.1"
+d=$(plant_project "$h" "" "6.12.0")
+render "$h" "$(payload_in "$d")"
+equals 'U6e a stable install is never offered a prerelease' "2" "$NLINES"
 
 # U7. Installed AHEAD of what is published says nothing. Ema runs a fork of bmad-loop, so
 # this is the ordinary case there, not a curiosity.
@@ -827,6 +923,106 @@ render "$h" "$(payload_in "$d")"
 hasnt "U10 the module version is not what was read" "9.9.9" "$OUT"
 has   "U10b the installation version was"           "(6.12.0)" "$L3"
 
+
+# ============================ 11. what an adversarial review found on 2026-09-05
+section "The holes an adversarial review found"
+
+# U13. A value out of the fetched file is PRINTED. A crafted one carrying an escape
+# sequence would emit OSC 52 (clipboard write) on every redraw, eight times a minute.
+h=$(new_home)
+printf 'stamp=%s\nloop_latest=2.0.0\033]52;c;QUFBQQ\007\nloop_installed=1.0.0\nmethod_latest=6.12.0\nmethod_next=\n' \
+    "$(date +%s)" > "$h/.claude/bmad-versions"
+d=$(plant_project "$h" "" "6.12.0")
+render "$h" "$(payload_in "$d")"
+hasnt "U13 an escape sequence never reaches the terminal" "]52;" "$OUT"
+hasnt "U13b nor does the value that carried it"           "2.0.0" "$OUT"; quiet "U13"
+
+# U14. The walk was bounded at eight and failed SILENTLY past it: a project root nine
+# levels above the session's directory was simply never found.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" ""
+d=$(plant_project "$h" "a/b/c/d/e/f/g/h/i" "6.11.0")
+render "$h" "$(payload_in "$d")"
+has "U14 a project nine levels up is still found" "bmad-method (6.12.0)" "$L3"
+
+# U15. A relative `current_dir` made `${d%/*}` return the same string for ever, so the walk
+# tested one directory to exhaustion. It must simply produce nothing, quietly.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" ""
+render "$h" "$(payload_in "src/deep")"
+equals "U15 a relative path yields no notice, and no hang" "2" "$NLINES"; quiet "U15"
+
+# U16. 🔴 THE CACHE DIRECTORY IS NOT FOLLOWED WHEN IT IS A SYMLINK. On a machine with no
+# TMPDIR the path is in world-writable /tmp and any local user can guess it; pre-create it
+# as a symlink and every cache write lands wherever they point. Here the symlink target is
+# a file the "victim" owns, and the assertion is that it is not truncated.
+# The symlink points at a DIRECTORY, which is the case that matters and the one an
+# earlier version of this test missed: pointed at a file, `[ -d ]` rejects it anyway and
+# the `-L` check is never exercised — the test passed with the defence removed. `-d`
+# FOLLOWS a symlink, so a symlinked directory looks perfectly ordinary to it.
+h=$(new_home)
+mkdir -p "$h/attacker" "$h/tmp"
+ln -s "$h/attacker" "$h/tmp/cc-statusline-cache-$(id -u)"
+plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "" 86400
+plant_fetcher "$h"
+render "$h" "$(payload 22.5 41.2)"
+equals "U16 a symlinked cache dir is refused, not followed" "" "$(/bin/ls "$h/attacker")"
+has    "U16b and the line still draws"                      "5h" "$L2"; quiet "U16"
+
+section "The fetcher, when the network only half answers"
+
+# The helper is run with a PATH of fakes: no test may touch the network.
+fake_net() {  # $1 dir, $2 gh behaviour (ok|fail), $3 npm behaviour (ok|fail)
+    mkdir -p "$1/bin"
+    if [ "$2" = ok ]; then printf '#!/bin/sh\necho v0.12.0\n' > "$1/bin/gh"
+    else printf '#!/bin/sh\nexit 1\n' > "$1/bin/gh"; fi
+    # The JSON is single-quoted INSIDE the generated script: without that, `sh` eats the
+    # double quotes and the fake emits {latest:6.12.0} — which the real parser correctly
+    # refuses, making the fixture look like a defect in the code under test.
+    if [ "$3" = ok ]; then printf '#!/bin/sh\ncat <<EOF\n{"latest":"6.12.0","next":"6.13.0-next.1"}\nEOF\n' > "$1/bin/npm"
+    else printf '#!/bin/sh\nexit 1\n' > "$1/bin/npm"; fi
+    printf '#!/bin/sh\nexit 1\n' > "$1/bin/curl"
+    printf '#!/bin/sh\nexit 1\n' > "$1/bin/bmad-loop"
+    chmod +x "$1/bin/gh" "$1/bin/npm" "$1/bin/curl" "$1/bin/bmad-loop"
+}
+field_of() { sed -n "s/^$2=//p" "$1"; }
+
+# F1. 🔴 A CHANNEL THAT COULD NOT BE ASKED KEEPS ITS PREVIOUS ANSWER. Before this, GitHub
+# being down while npm was up wrote an EMPTY loop_latest beside a fresh stamp — hiding a
+# real bmad-loop update for the six hours until the cache aged out, and leaving the status
+# line unable to tell "nothing is newer" from "nobody could ask".
+w=$(mktemp -d "$ROOT/fetch.XXXXXX")
+printf 'stamp=1\nloop_latest=0.12.0\nloop_installed=0.11.1\nmethod_latest=6.11.0\nmethod_next=\n' > "$w/cache"
+fake_net "$w" fail ok
+PATH="$w/bin:/usr/bin:/bin" BMAD_VERSIONS_OUT="$w/cache" sh "$REPO/bmad-versions.sh" >/dev/null 2>&1
+equals "F1  a failed channel keeps its old value" "0.12.0" "$(field_of "$w/cache" loop_latest)"
+equals "F1b while the one that answered is updated" "6.12.0" "$(field_of "$w/cache" method_latest)"
+
+# F2. The lease is atomic: a second fetcher arriving while one holds it does nothing at all
+# rather than adding another detached network client.
+w=$(mktemp -d "$ROOT/fetch2.XXXXXX")
+printf 'stamp=1\nloop_latest=0.9.0\nmethod_latest=6.0.0\nmethod_next=\n' > "$w/cache"
+fake_net "$w" ok ok
+mkdir -p "$w/cache.lease"; printf '%s\n' "$(date +%s)" > "$w/cache.lease/ts"
+PATH="$w/bin:/usr/bin:/bin" BMAD_VERSIONS_OUT="$w/cache" sh "$REPO/bmad-versions.sh" >/dev/null 2>&1
+equals "F2  a held lease stops the second fetcher" "0.9.0" "$(field_of "$w/cache" loop_latest)"
+rm -rf "$w/cache.lease"
+PATH="$w/bin:/usr/bin:/bin" BMAD_VERSIONS_OUT="$w/cache" sh "$REPO/bmad-versions.sh" >/dev/null 2>&1
+equals "F2b and once released it proceeds" "0.12.0" "$(field_of "$w/cache" loop_latest)"
+
+# ================================================== 12. the version people are sent to
+section "The version the README sends people to"
+
+# 🔴 THE PUBLIC INSTALL COMMAND WAS BROKEN, and nothing here could see it. install.sh
+# carried VERSION="1.0.4" and the README told everybody to curl `.../v1.0.4/install.sh`,
+# while the newest tag ever pushed was v1.0.2 — so the one-line install in the README
+# answered 404 for anyone who tried it. Checked against the real remote on 2026-09-05.
+#
+# Whether a TAG exists is a question for the network and not for this suite. What is local,
+# free and was never checked is that the two files AGREE: a bump that touches one and
+# forgets the other is exactly how the pair drifted apart.
+_iv=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$REPO/install.sh" | head -n1)
+_rv=$(sed -n 's|.*/pacekeeper/v\([0-9][0-9.]*\)/install\.sh.*|\1|p' "$REPO/README.md" | head -n1)
+equals "V1  install.sh and the README name the same version" "$_iv" "$_rv"
+[ -n "$_iv" ] && ok || bad "V1b install.sh actually declares a VERSION" "a version" "nothing"
 
 section "The installer, executed rather than read"
 
