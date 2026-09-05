@@ -152,7 +152,8 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 | Block | Looks like | When it appears |
 |---|---|---|
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
-| **7-day window** | `7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
+| **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
+| **7-day pace** | `(+29h)`, in brackets on the 7-day block — or `7d pace +29h` on its own when the line is too narrow | with the 7-day window |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
@@ -177,6 +178,43 @@ It is built as a difference of *times*, not of percentages, because that is what
 edges: at the top of a fresh window — five hours left, nothing spent — it reads `0m` rather than
 accusing you of being behind, and half an hour later with nothing spent it reads `-30m`, which is
 exactly the half hour of window that went by.
+
+**The same pace, for the week.** `7d pace +29h` answers the identical question over the seven-day
+window, and it is the same arithmetic with a different denominator:
+
+```
+allowance left, expressed as window time  =  7d × (100 − used%)
+pace                                      =  time to the reset  −  that
+```
+
+| | |
+|---|---|
+| `+29h` | the weekly allowance dies twenty-nine hours before the window reopens |
+| `-8h` | eight hours' worth of allowance will expire unused |
+| `0h` | the two run out together |
+
+Three things about it are deliberate.
+
+*The denominator is the window's real length, not a hard 7.* After a counter restart mid-window the
+100% in hand has fewer days to cover — the `/2` case above — and a hard 7 would spread the
+allowance over days it does not have and report room that is not there.
+
+*It does not replace `today still 8.1%`.* They are one fact in two units, and they can honestly
+disagree by up to a day, because the daily balance counts whole days while the pace counts the
+hours of today that are still in front of you. The percentage is the approximation; keep both,
+because the percentage is also the figure the spend guard enforces.
+
+*It sits in brackets on the end of the 7-day block, the same shape as the 5-hour one, whenever
+there is room for it.* The information is the same kind, so it should read the same way. But the
+two blocks are not the same length: the 5-hour block carries one bracket group and the 7-day block
+already carries one, so a second takes the line past 60 columns — and a block is never folded in
+half, so a block that cannot fit gets truncated, which on a status line means gone rather than
+ugly. Hence: in brackets when it fits, and a block of its own when it does not. The standalone form
+carries a `7d pace` label so a bare `+29h` after a separator can never be mistaken for the
+five-hour figure.
+
+Its bands are the five-hour ones scaled to a window 33.6 times longer, rounded to units anybody
+reads: **red above `+24h`**, **amber `+8h` to `+24h`**, **green `-24h` to `+8h`**, **yellow below**.
 
 **The bands are asymmetric on purpose.** Being blocked costs more than leaving quota on the table,
 so the strict side is the fast one:
@@ -376,7 +414,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.2.0/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard

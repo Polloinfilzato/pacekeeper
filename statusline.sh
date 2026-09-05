@@ -959,59 +959,64 @@ EOF
     # about 8h and 25h. Rounded to 8h and 24h because a day is the unit anybody reads here.
     # The asymmetry is kept for the reason it exists there: being blocked costs more than
     # leaving allowance on the table, so the strict side is the fast one.
-    week_pace_block=""
-    if [ "$has_wreset" = true ] && [ -n "${week_left:-}" ] && [ -n "${week_rem:-}" ]; then
+    week_pace_block=""; week_pace_paren=""; week_pace_bare=""
+    if [ "$has_wreset" = true ] && [ -n "${week_pct:-}" ] && [ -n "${week_rem:-}" ] \
+       && [ "${week_rem:-0}" -ge 0 ] 2>/dev/null; then
+        # 🔴 THE DENOMINATOR IS `week_span`, THE REAL SPAN IN SECONDS -- not `week_days`.
+        # `week_days` is a daily-bucket count ROUNDED UP (`G = ceil(span/86400)` above), which
+        # is right for slicing a daily share and wrong for a continuous duration: after a
+        # counter restart leaving a 3d12h window it reports 4, so a full allowance over a
+        # 3d12h window printed `-12h` when the honest answer is `0h`. Found by an adversarial
+        # review, 2026-09-05, and it is exactly the class the review existed for: the code
+        # matched its own tests because the tests were written from the same wrong premise.
+        #
+        # 🔴 AND IT READS `week_pct`, THE RAW PERCENTAGE -- not `week_left`, which is
+        # `printf "%.0f"` of it. A display-rounded input carries up to half a point of error,
+        # which on a seven-day window is nearly 50 minutes: at 0.49% used `week_left` is 100,
+        # and a real `+48m` printed as `0h`. Never feed a rounded figure into arithmetic whose
+        # output is finer than the rounding.
         IFS=' ' read -r _wp_sec _wp_col <<EOF
-$(awk -v rem="$week_left" -v left="$week_rem" -v days="${week_days:-7}" 'BEGIN{
-    if (days < 1) days = 7
-    win = days * 86400
+$(LC_ALL=C awk -v p="$week_pct" -v left="$week_rem" -v win="${week_span:-604800}" 'BEGIN{
+    if (win < 3600) win = 604800
+    rem = 100 - p; if (rem < 0) rem = 0; if (rem > 100) rem = 100
     if (left < 0) left = 0
     if (left > win) left = win          # a reset further out than the window is not one
-    if (rem < 0) rem = 0
-    if (rem > 100) rem = 100
     x = left - win * rem / 100
-    # Rounded to the HOUR, not truncated: the display shows days and hours, and 59 minutes
-    # printed as "0h" is off by a whole unit of the smallest unit anybody reads here.
-    x = int(x / 3600 + (x >= 0 ? 0.5 : -0.5)) * 3600
-    printf "%d %s", x, (x > 86400 ? "R" : (x > 28800 ? "A" : (x >= -86400 ? "G" : "Y")))
+    printf "%d %s", int(x + (x >= 0 ? 0.5 : -0.5)), (x > 86400 ? "R" : (x > 28800 ? "A" : (x >= -86400 ? "G" : "Y")))
 }')
 EOF
         if [ -n "$_wp_sec" ]; then
             _wp_c=$(pick_color "$_wp_col")
-            # Under an hour either way there is no sign to give: "-0h" on a window that has
-            # just opened reads as a warning, and it is the opposite of one.
-            # A COMPACT FORMAT, and the reason is width rather than taste. This figure lives
-            # INSIDE the seven-day block, and a block is never folded in half (W6), so every
-            # character added here is a character the whole block must still fit in at 60
-            # columns. `fmt_dh`'s "1g 5h" made the block 64 wide against a 60 ceiling and
-            # broke W3 — and an overrun is not merely ugly: Claude Code TRUNCATES the status
-            # line, so what passes the right edge is gone.
-            # So: hours below two days, whole days above. At a seven-day scale the day is
-            # the unit anybody reads, and "+29h" carries the same decision as "+1g 5h" in
-            # four characters instead of six. Worst case here is 5 columns (" +29h").
+            # ONE rounding, taken from the raw seconds. Rounding to the hour and THEN to the
+            # day rounds twice: an exact +59h30m became +60h and printed +3g, though it is
+            # nearer two days than three.
+            # A COMPACT FORMAT, and the reason is width rather than taste. Inline inside the
+            # seven-day block this made the line 63 columns against a 60 ceiling; a block is
+            # never folded in half, so a block that cannot fit gets TRUNCATED -- and on this
+            # status line truncated means gone, not ugly. Hours below two days, whole days
+            # above: at a seven-day scale the day is the unit anybody reads.
             _wp_abs=$(( _wp_sec < 0 ? -_wp_sec : _wp_sec ))
-            if [ "$_wp_sec" -lt 3600 ] 2>/dev/null && [ "$_wp_sec" -gt -3600 ] 2>/dev/null; then
-                # Under an hour either way there is no sign to give: "-0h" on a window that
-                # has just opened reads as a warning, and it is the opposite of one.
+            if [ "$_wp_abs" -lt 1800 ]; then
+                # Under half an hour it rounds to zero, and a zero carries no sign: "-0h" on a
+                # window that has just opened reads as a warning, and it is the opposite of one.
                 _wp_txt="0h"
+            elif [ "$_wp_abs" -lt 172800 ]; then
+                _wp_txt="$(( (_wp_abs + 1800) / 3600 ))h"
             else
-                if [ "$_wp_abs" -lt 172800 ]; then
-                    _wp_txt="$(( _wp_abs / 3600 ))h"
-                else
-                    # rounded, not truncated: 2g23h is nearer three days than two
-                    _wp_txt="$(( (_wp_abs + 43200) / 86400 ))${T_DAY}"
-                fi
-                [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"
+                _wp_txt="$(( (_wp_abs + 43200) / 86400 ))${T_DAY}"
             fi
-            # IT IS ITS OWN BLOCK, and that is not a layout preference — it is the only shape
-            # that fits. Measured 2026-09-05: inline inside the seven-day block, the line went
-            # to 63 columns against a 60 ceiling, and it stayed at 62 after every shortening
-            # that kept the figure readable. A block is never folded in half (W6), so a block
-            # that cannot fit is a block that gets TRUNCATED — and on this status line
-            # truncated means gone, not ugly. As its own block it folds onto its own line on a
-            # narrow terminal, which is exactly what the folding machinery exists for.
-            # It carries the "7d" prefix because a bare "+29h" sitting after a separator could
-            # be mistaken for the five-hour figure, which is the one thing this must never be.
+            [ "$_wp_abs" -ge 1800 ] && { [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"; }
+            # IT IS ITS OWN BLOCK: see the width note above. It carries the "7d" prefix because
+            # a bare "+29h" after a separator could be taken for the five-hour figure, which is
+            # the one thing it must never be.
+            # Two shapes of the same figure. Which one is used is decided further down,
+            # where the terminal width is known: `week_pace_paren` in brackets on the end of
+            # the seven-day block when it fits, `week_pace_block` as a block of its own when
+            # it does not. The standalone form carries the "7d" prefix because a bare "+29h"
+            # after a separator could be taken for the five-hour figure, which is the one
+            # thing it must never be; inside the seven-day block that prefix would be noise.
+            week_pace_bare="$_wp_txt"
+            week_pace_paren="${_wp_c}(${_wp_txt})${GRAY}"
             week_pace_block="${GRAY}7d ${T_PACE} ${_wp_c}${_wp_txt}${GRAY}"
         fi
     fi
@@ -1563,6 +1568,29 @@ sep="${GRAY}   │   "
 _sep_w=7          # "   │   " on screen
 _indent="  "
 _cols=$(pk_cols)
+
+# --- THE SEVEN-DAY PACE GOES IN BRACKETS, LIKE THE FIVE-HOUR ONE, WHENEVER IT FITS ---
+# Ema, 2026-09-05: «l'informazione e' concettualmente analoga, quindi anche graficamente deve
+# apparire nella stessa maniera». He is right, and the block of its own was never a design
+# choice — it was a workaround for a width limit.
+#
+# But the two are not the same length. The five-hour block carries ONE bracket group; the
+# seven-day block already carries one (`oggi oltre di 10,7%`), and a second takes the line to
+# about 69 columns. A block is never folded in half, so a block that does not fit is a block
+# that gets TRUNCATED — and on this status line truncated means gone, not ugly.
+#
+# So the choice is not "inline or separate", it is: inline when there is room, separate only
+# when there is not. The decision must be taken HERE and not where the block is built, because
+# only here is the terminal width known.
+if [ -n "$week_pace_block" ] && [ -n "$week_block" ] && [ -n "${week_pace_bare:-}" ]; then
+    _merged="${week_block} ${week_pace_paren}"
+    if [ "$_cols" -gt 0 ] 2>/dev/null \
+       && [ "$(pk_visible "${_indent}${_merged}")" -le "$_cols" ] 2>/dev/null; then
+        week_block="$_merged"
+        week_pace_block=""
+    fi
+fi
+
 rate_info=""; _cur=""; _cur_w=0
 for blk in "$five_block" "$week_block" "$week_pace_block" "$renew_block"; do
     [ -z "$blk" ] && continue
