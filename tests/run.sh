@@ -27,7 +27,11 @@ case "$ROOT" in
     /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) : ;;
     *) printf 'refusing to run: %s is not a temporary directory\n' "$ROOT" >&2; exit 1 ;;
 esac
-trap 'rm -rf "$ROOT"' EXIT
+# Cleaned TWICE, with a pause between. The fetcher cases deliberately spawn a detached
+# process, and it can still be writing into the throwaway home when the suite exits — the
+# first `rm -rf` then reports "Directory not empty" and leaves litter behind in the real
+# temp directory. Waiting once and sweeping again costs a fifth of a second.
+trap 'rm -rf "$ROOT" 2>/dev/null; sleep 0.2; rm -rf "$ROOT" 2>/dev/null' EXIT
 
 # ------------------------------------------------------------------- --prove
 # A suite nobody has seen fail certifies nothing. This re-introduces the defects
