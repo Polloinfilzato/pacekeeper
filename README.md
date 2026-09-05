@@ -208,11 +208,11 @@ saying "today" at 15:41, not at midnight.
 
 For users of [bmad-loop](https://pypi.org/project/bmad-loop/), the unattended story-runner.
 
-**It has a line to itself, and only when a run exists.** It used to ride at the end of line 2,
+**It has a line to itself, and only when there is something to say.** It used to ride at the end of line 2,
 behind both quota windows and the renewal countdown. Three blocks and two separators come first,
 so in an ordinary terminal the block that changes minute by minute was the one pushed past the
-right-hand edge — wrapped, or cut. With no run alive nothing is printed at all and the status line
-is two lines, exactly as it was.
+right-hand edge — wrapped, or cut. With no run alive and nothing to update, nothing is printed at all
+and the status line is two lines, exactly as it was.
 
 It shows the live run — never the finished ones, which would occupy the line
 forever — with the state as a symbol when things are fine and as a word when they are not:
@@ -230,6 +230,37 @@ A run you stopped yourself stays silent: you already know.
 
 It reads `--json`, which bmad-loop documents as its stable machine-readable contract, and it
 handles the fact that `list` and `status` do not use the same vocabulary for the same run.
+
+#### Updates available
+
+The same line says when one of the two tools has a newer version published, and **only** then:
+
+| | |
+|---|---|
+| `⬆ bmad-loop (0.12.0)` | with no run in flight, this is the whole line |
+| `bmad 7-4 ⏵ 47m (dev) · ⬆ bmad-method (6.12.0)` | with a run, the notice joins it — never a fourth line |
+
+Everything current means no line. That is the point of it.
+
+**The network is never on the drawing path.** A helper, `bmad-versions.sh`, fetches what is
+*published* — bmad-loop's newest upstream release tag, and BMAD Method's npm `latest` and `next` —
+detached, at most once every thirty minutes and only when its cache has aged past six hours. The
+status line reads that small file and waits for nothing. If it is missing or empty, no update is
+ever mentioned: the line hides rather than guesses.
+
+What is *installed* is read live, at draw time, because it is local and free — so the notice
+disappears the moment you upgrade, instead of lingering until the next fetch. The two tools are
+read differently on purpose:
+
+- **bmad-loop** has one version for the machine, taken from a directory name under `uv`'s tool
+  tree — no process, no network. Installed another way, it falls back to the fetched file and may
+  be a few hours behind.
+- **BMAD Method** has **one version per project**, read from `_bmad/_config/manifest.yaml` by
+  walking up from the session's directory. Two terminals can honestly disagree.
+
+And it follows the **channel**: a project installed on a prerelease is compared against npm's
+`next`, never against `latest`. Pointed at the wrong channel it would tell a `next` project, on
+every redraw for ever, to move to a version that is not on its channel.
 
 ---
 

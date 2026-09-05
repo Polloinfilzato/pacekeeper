@@ -13,6 +13,8 @@
 #     the register. The register may be called PIANO.md or PLAN.md and be written in
 #     Italian or English: names, labels and states are recognised in both languages, with
 #     or without backticks and bold. Details in the comment above that block.
+#   - bmad-loop / BMAD Method updates, ONLY when one is available, with the new version
+#     in brackets. Never fetched on the drawing path: see the block's own comment.
 #   - session cost (API users only, above $0.01)
 
 input=$(cat)
@@ -926,6 +928,123 @@ if ! pk_off bmad && command -v bmad-loop >/dev/null 2>&1 && [ -f "$HOME/.claude/
     fi
 fi
 
+# --- Updates available for bmad-loop and BMAD Method ---
+# WHAT IT SHOWS, and only that: the tools that HAVE something newer, with the new version
+# in brackets. Nothing when everything is current — asked for in exactly those terms.
+#
+# THE SPLIT THAT MAKES IT FREE. Asking the network takes a second or two and this line
+# redraws every few; so the two halves are separated by how much they cost:
+#
+#   what is PUBLISHED   network. Fetched by `bmad-versions.sh`, DETACHED, at most once
+#                       every 30 minutes and only when the cache has gone stale. The
+#                       status line never waits for it and never fails with it.
+#   what is INSTALLED   local and free, so it is read HERE, at draw time. That is not a
+#                       detail: it means the notice disappears the instant an upgrade
+#                       lands, instead of lingering until the next fetch.
+#
+# THE TWO TOOLS ARE NOT VERSIONED THE SAME WAY, and treating them alike gets both wrong:
+#
+#   bmad-loop     ONE version for the machine. Installed through `uv`, so the version is
+#                 legible from a directory NAME under uv's tool tree - no process, no
+#                 network. `bmad-loop --version` would cost a python start-up on every
+#                 redraw, which is why the fallback for non-uv installs comes from the
+#                 fetched file instead and is allowed to be a few hours old.
+#   BMAD Method   ONE VERSION PER PROJECT, in `_bmad/_config/manifest.yaml`. So this is
+#                 read relative to the directory the session is in, walking up to the
+#                 project root - the answer is genuinely different in two terminals.
+#
+# 🔴 AND IT HAS TWO CHANNELS, `latest` and `next`, which is not pedantry: some projects
+# deliberately track prereleases (measured 2026-09-05: two of them on 6.10.1-next.12). A
+# project on `next` compared against `latest` is told to move to a version that is not on
+# its channel, every single redraw, for ever. The channel is chosen by what is INSTALLED.
+bmad_upd=""
+if ! pk_off bmad; then
+    _bv_file="$HOME/.claude/bmad-versions"
+    _bv_stamp=0; _bv_loop_latest=""; _bv_loop_inst=""; _bv_m_latest=""; _bv_m_next=""
+    if [ -r "$_bv_file" ]; then
+        while IFS='=' read -r _k _v; do
+            case "$_k" in
+                stamp)          _bv_stamp=$_v ;;
+                loop_latest)    _bv_loop_latest=$_v ;;
+                loop_installed) _bv_loop_inst=$_v ;;
+                method_latest)  _bv_m_latest=$_v ;;
+                method_next)    _bv_m_next=$_v ;;
+            esac
+        done < "$_bv_file"
+    fi
+    case "$_bv_stamp" in ''|*[!0-9]*) _bv_stamp=0 ;; esac
+
+    # Refresh, detached, when the file is older than six hours. Rate-limited by a stamp
+    # file rather than a lock: two redraws racing inside the same second would both spawn,
+    # and the fetcher's write is atomic, so the race is harmless - while a stale LOCK left
+    # behind by a killed fetcher would switch the whole thing off silently, which is not.
+    if [ "$PK_CAN_WRITE" = yes ] && [ -x "$HOME/.claude/bmad-versions.sh" ] \
+       && [ $(( now - _bv_stamp )) -gt 21600 ]; then
+        _bv_try="${cache_dir}/bmad-versions.attempt"
+        _bv_last=0
+        [ -r "$_bv_try" ] && IFS= read -r _bv_last < "$_bv_try" 2>/dev/null
+        case "$_bv_last" in ''|*[!0-9]*) _bv_last=0 ;; esac
+        if [ $(( now - _bv_last )) -gt 1800 ]; then
+            mkdir -p "$cache_dir" 2>/dev/null
+            printf '%s\n' "$now" > "$_bv_try" 2>/dev/null
+            ( "$HOME/.claude/bmad-versions.sh" >/dev/null 2>&1 & ) >/dev/null 2>&1
+        fi
+    fi
+
+    # Is `b` newer than `a`? Numbers only, in order, missing parts count as zero:
+    # `6.11.1-next.44` becomes 6·11·1·44. The two are only ever compared WITHIN one
+    # channel, so a prerelease is never weighed against its own final release - which is
+    # the one place this simplification would answer backwards.
+    pk_newer() {
+        [ -n "$1" ] && [ -n "$2" ] || return 1
+        awk -v a="$1" -v b="$2" 'BEGIN{
+            n = split(a, x, /[^0-9]+/); m = split(b, y, /[^0-9]+/)
+            k = (n > m) ? n : m
+            for (i = 1; i <= k; i++) {
+                p = (i <= n && x[i] != "") ? x[i] + 0 : 0
+                q = (i <= m && y[i] != "") ? y[i] + 0 : 0
+                if (q > p) exit 0
+                if (q < p) exit 1
+            }
+            exit 1
+        }'
+    }
+
+    # --- bmad-loop: the installed version from uv's tool tree, no process ---
+    _bv_loop_have=""
+    for _d in "$HOME"/.local/share/uv/tools/bmad-loop/lib/python*/site-packages/bmad_loop-*.dist-info; do
+        [ -d "$_d" ] || continue
+        _bv_loop_have=${_d##*/bmad_loop-}; _bv_loop_have=${_bv_loop_have%.dist-info}
+    done
+    [ -z "$_bv_loop_have" ] && _bv_loop_have=$_bv_loop_inst
+    if pk_newer "$_bv_loop_have" "$_bv_loop_latest"; then
+        bmad_upd="bmad-loop (${_bv_loop_latest})"
+    fi
+
+    # --- BMAD Method: per project, walking up from the session's directory ---
+    # Bounded to eight levels: an unbounded walk on a path that is not in a project climbs
+    # to / on every single redraw, and it would do it silently.
+    _bv_dir=$cwd; _bv_hops=0; _bv_man=""
+    while [ "$_bv_hops" -lt 8 ] && [ -n "$_bv_dir" ] && [ "$_bv_dir" != "/" ]; do
+        if [ -r "$_bv_dir/_bmad/_config/manifest.yaml" ]; then _bv_man="$_bv_dir/_bmad/_config/manifest.yaml"; break; fi
+        _bv_dir=${_bv_dir%/*}; _bv_hops=$(( _bv_hops + 1 ))
+    done
+    if [ -n "$_bv_man" ]; then
+        # The FIRST `version:` under `installation:`, not any of the per-module ones that
+        # follow it: those are the same number today and are free to diverge tomorrow.
+        _bv_m_have=$(awk '/^installation:/{f=1; next} f && /^[[:space:]]+version:/{gsub(/[[:space:]"]/,"",$2); print $2; exit} f && /^[^[:space:]]/{exit}' "$_bv_man" 2>/dev/null)
+        case "$_bv_m_have" in
+            *-*) _bv_m_want=$_bv_m_next ;;    # a prerelease is compared against `next`
+            *)   _bv_m_want=$_bv_m_latest ;;
+        esac
+        if pk_newer "$_bv_m_have" "$_bv_m_want"; then
+            [ -n "$bmad_upd" ] && bmad_upd="${bmad_upd} · "
+            bmad_upd="${bmad_upd}bmad-method (${_bv_m_want})"
+        fi
+    fi
+    [ -n "$bmad_upd" ] && bmad_upd="${ORANGE}⬆${GRAY} ${bmad_upd}"
+fi
+
 # The subscription renewal block.
 # The date is NOT exposed by Claude Code: it goes by hand into ~/.claude/subscription.conf
 #   RENEWAL_DAY=14           -> monthly renewal, the 14th of each month
@@ -1206,8 +1325,19 @@ done
 # it, and the one block that changes minute by minute is the one you cannot read. Its own
 # line costs a row only while a run exists - with no run, `bmad_info` is empty and nothing
 # is printed, exactly as before.
+# The update notice rides the same line, and MAKES THE LINE APPEAR when there is no run
+# (Ema, 2026-09-05: option A). A notice that only showed during a run would be nearly
+# invisible - you do not upgrade anything mid-run - and it would go unseen for as long as
+# no run happens to be in flight. With neither a run nor an update the line still does not
+# exist at all, which is the whole "least invasive" request.
 bmad_info=""
-[ -n "$bmad_block" ] && bmad_info="  ${bmad_block}${RESET}"
+if [ -n "$bmad_block" ] && [ -n "$bmad_upd" ]; then
+    bmad_info="  ${bmad_block}${GRAY} · ${bmad_upd}${RESET}"
+elif [ -n "$bmad_block" ]; then
+    bmad_info="  ${bmad_block}${RESET}"
+elif [ -n "$bmad_upd" ]; then
+    bmad_info="  ${GRAY}${bmad_upd}${RESET}"
+fi
 
 # --- Session cost, computed from the transcript ---
 # NOTE: this is a THEORETICAL "as-if pay-per-use" cost, summed from the transcript tokens at

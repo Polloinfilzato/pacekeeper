@@ -95,8 +95,22 @@ PY
         "        elif [ -n \"\" ]; then"
 
     prove_one "the bmad run goes back onto line 2" statusline.sh \
-        "[ -n \"\$bmad_block\" ] && bmad_info=\"  \${bmad_block}\${RESET}\"" \
-        "[ -n \"\$bmad_block\" ] && rate_info=\"\${rate_info}\${sep}\${bmad_block}\${RESET}\""
+        "elif [ -n \"\$bmad_block\" ]; then
+    bmad_info=\"  \${bmad_block}\${RESET}\"" \
+        "elif [ -n \"\$bmad_block\" ]; then
+    rate_info=\"\${rate_info}\${sep}\${bmad_block}\${RESET}\""
+
+    prove_one "the update notice stops being conditional" statusline.sh \
+        "    if pk_newer \"\$_bv_loop_have\" \"\$_bv_loop_latest\"; then" \
+        "    if true; then"
+
+    prove_one "a prerelease project is pointed at the stable channel" statusline.sh \
+        "            *-*) _bv_m_want=\$_bv_m_next ;;    # a prerelease is compared against \`next\`" \
+        "            *-*) _bv_m_want=\$_bv_m_latest ;;"
+
+    prove_one "the module version is read instead of the installation one" statusline.sh \
+        "        _bv_m_have=\$(awk '/^installation:/{f=1; next} f && /^[[:space:]]+version:/{gsub(/[[:space:]\"]/,\"\",\$2); print \$2; exit} f && /^[^[:space:]]/{exit}' \"\$_bv_man\" 2>/dev/null)" \
+        "        _bv_m_have=\$(awk '/^[[:space:]]+version:/{gsub(/[[:space:]\"]/,\"\",\$2); v=\$2} END{print v}' \"\$_bv_man\" 2>/dev/null)"
 
     prove_one "an exceeded limit is thrown away again" statusline.sh \
         "    [ \"\${1%%.*}\" -le 1000 ] 2>/dev/null || return 1" \
@@ -632,6 +646,115 @@ render "$h" "$(payload 22.5 41.2)"
 equals "B9  no run, no third line"                 "2"        "$NLINES"
 equals "B10 and line 3 is empty"                   ""         "$L3"
 quiet  "B11"
+
+# ================================ 10. updates available for bmad-loop / BMAD Method
+section "Updates available: shown only when there IS one"
+
+# The two halves are planted separately, exactly as they are read: what is PUBLISHED goes
+# into the fetched file, what is INSTALLED into the places the status line reads live.
+# No network is touched here, and none should ever be: a test that needs the internet
+# fails for reasons that have nothing to do with the code, and then gets switched off.
+plant_versions() {  # $1 home, $2 loop_installed, $3 loop_latest, $4 method_latest, $5 method_next
+    { printf 'stamp=%s\n' "$(date +%s)"
+      printf 'loop_latest=%s\n' "$3"
+      printf 'loop_installed=%s\n' "$2"
+      printf 'method_latest=%s\n' "$4"
+      printf 'method_next=%s\n' "$5"; } > "$1/.claude/bmad-versions"
+}
+# A project with BMAD Method installed at $3, and a payload whose cwd is $2 inside it.
+plant_project() {  # $1 home, $2 subdir under the project root ("" for the root), $3 version
+    local root="$1/proj"
+    mkdir -p "$root/_bmad/_config"
+    printf 'installation:\n  version: %s\n  installDate: x\nmodules:\n  - name: core\n    version: 9.9.9\n' "$3" \
+        > "$root/_bmad/_config/manifest.yaml"
+    [ -n "$2" ] && mkdir -p "$root/$2"
+    printf '%s' "$root${2:+/$2}"
+}
+payload_in() {  # $1 dir, then the usual percentages
+    local now; now=$(date +%s)
+    printf '{"workspace":{"current_dir":"%s"},"model":{"display_name":"Opus 5"},"context_window":{"used_percentage":12},"rate_limits":{"five_hour":{"used_percentage":22.5,"resets_at":%s},"seven_day":{"used_percentage":41.2,"resets_at":%s}}}' \
+        "$1" "$((now + 7000))" "$((now + 300000))"
+}
+
+# U1. THE WHOLE POINT: everything current, no run -> the line does not exist at all.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.12.0")
+render "$h" "$(payload_in "$d")"
+equals "U1  all current: still only two lines" "2" "$NLINES"
+hasnt  "U1b and no arrow anywhere"             "⬆" "$OUT"; quiet "U1"
+
+# U2. bmad-loop behind, no run: the line APPEARS, carrying only the update.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "6.11.1-next.44"
+render "$h" "$(payload 22.5 41.2)"
+has    "U2  bmad-loop behind: the tool is named"   "bmad-loop"  "$L3"
+has    "U2b with the NEW version in brackets"      "(0.12.0)"   "$L3"
+hasnt  "U2c and not the installed one"             "(0.11.1)"   "$L3"
+equals "U2d the line exists without any run"       "3"          "$NLINES"; quiet "U2"
+
+# U3. BMAD Method is per PROJECT: read from the manifest under the session's directory.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.11.0")
+render "$h" "$(payload_in "$d")"
+has    "U3  method behind: named with its target"  "bmad-method (6.12.0)" "$L3"
+hasnt  "U3b and the loop, being current, is silent" "bmad-loop"           "$L3"; quiet "U3"
+
+# U4. Both behind: both named, one line.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.11.0")
+render "$h" "$(payload_in "$d")"
+has    "U4  both: the loop"   "bmad-loop (0.12.0)"   "$L3"
+has    "U4b both: the method" "bmad-method (6.12.0)" "$L3"
+equals "U4c still one line"   "3"                    "$NLINES"
+
+# U5. With a run in flight the notice rides the SAME line, after the run.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "6.11.1-next.44"
+plant_run "$h" "running${US}7-4${US}dev${US}2820${US}${US}0${US}0"
+_pk_path=$PATH; PATH="$h/bin:$PATH"
+render "$h" "$(payload 22.5 41.2)"
+PATH=$_pk_path
+has    "U5  the run is still there"        "bmad 7-4"           "$L3"
+has    "U5b and the update joins it"       "bmad-loop (0.12.0)" "$L3"
+equals "U5c without costing a fourth line" "3"                  "$NLINES"
+
+# U6. 🔴 THE CHANNEL. A project on a prerelease is compared against `next`, never against
+# `latest`: pointed at `latest` it would be told, on every redraw for ever, to move to a
+# version that is not on its channel.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.10.1-next.12")
+render "$h" "$(payload_in "$d")"
+has    'U6  a prerelease project is offered next' "(6.11.1-next.44)" "$L3"
+hasnt  'U6b and never latest' "(6.12.0)" "$L3"
+
+# U7. Installed AHEAD of what is published says nothing. Ema runs a fork of bmad-loop, so
+# this is the ordinary case there, not a curiosity.
+h=$(new_home); plant_versions "$h" "0.12.0" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.12.0")
+render "$h" "$(payload_in "$d")"
+equals "U7  ahead of upstream: nothing to say" "2" "$NLINES"
+
+# U8. No fetched file at all: silent, and no third line. The status line must never
+# invent a target version, and must never wait for the network to find out.
+h=$(new_home); d=$(plant_project "$h" "" "6.11.0")
+render "$h" "$(payload_in "$d")"
+equals "U8  nothing fetched yet: two lines" "2"  "$NLINES"
+hasnt  "U8b and no empty brackets"          "()" "$OUT"; quiet "U8"
+
+# U9. The manifest is found by walking UP: a session sitting three directories inside the
+# project is still in that project.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "src/deep/deeper" "6.11.0")
+render "$h" "$(payload_in "$d")"
+has    "U9  found from three levels down" "bmad-method (6.12.0)" "$L3"
+
+# U10. The version read is `installation.version`, NOT the per-module one that follows it.
+# They are the same number today and are free to diverge tomorrow; the fixture makes the
+# module version 9.9.9 precisely so reading the wrong one cannot look right.
+h=$(new_home); plant_versions "$h" "0.11.1" "0.11.1" "6.12.0" "6.11.1-next.44"
+d=$(plant_project "$h" "" "6.11.0")
+render "$h" "$(payload_in "$d")"
+hasnt "U10 the module version is not what was read" "9.9.9" "$OUT"
+has   "U10b the installation version was"           "(6.12.0)" "$L3"
+
 
 section "The installer, executed rather than read"
 

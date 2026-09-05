@@ -49,14 +49,14 @@ PACEKEEPER_BASE="${PACEKEEPER_BASE:-https://raw.githubusercontent.com/Polloinfil
 # The files that get installed, and the files that get touched. The second list is
 # longer than the first: subscription.conf and settings.json are modified rather than
 # copied, and the version that forgot to protect them lost people's configuration.
-FILES="statusline.sh statusline-bmad.py statusline-cache.py pacekeeper-quota"
-TOUCHED="statusline.sh statusline-bmad.py statusline-cache.py pacekeeper-quota settings.json subscription.conf"
+FILES="statusline.sh statusline-bmad.py statusline-cache.py pacekeeper-quota bmad-versions.sh"
+TOUCHED="statusline.sh statusline-bmad.py statusline-cache.py pacekeeper-quota bmad-versions.sh settings.json subscription.conf"
 
 # Runtime state the status line CREATES while it runs. It cannot be in the manifest,
 # because none of it exists at install time - and that is exactly why an uninstall that
 # only consults the manifest leaves it behind. Measured 2026-09-03: after a clean install
 # and uninstall, quota-origin and rate-limits.json were still there.
-ARTIFACT_FILES="quota-state quota-origin rate-limits.json"
+ARTIFACT_FILES="quota-state quota-origin rate-limits.json bmad-versions"
 ARTIFACT_DIRS="rate-limits.d context-usage"
 
 if [ -t 1 ]; then
