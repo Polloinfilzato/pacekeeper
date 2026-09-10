@@ -583,6 +583,42 @@ for pub in no yes; do
     quiet "W4-$pub"
 done
 
+# A DROP THAT LANDS HIGH IS NOT A RESTART. The case above only ever exercised a counter that
+# fell to near zero, so the branch was free to ignore where the fall LANDED - and it did.
+# Measured on a live machine 2026-09-11 at 00:10, with the numbers below: the figure fell from
+# 82% to 72% at an unchanged weekly deadline, the branch called it a restart, and a window with
+# 1d7h left in it was declared the whole allowance. `d6/7 (today still 13.7%)` became
+# `d1/2 (today over by 22.0%)`, and the spend guard that reads those figures turned RED - it
+# would have denied every launch of that night on a number that was never true.
+# The five-hour stamp advances between the two renders on purpose: that is what a fresh
+# five-hour window looks like, and it is what let the lower weekly figure win the freshness
+# comparison in the first place. Without it this case cannot happen at all.
+NOW=$(date +%s)
+for pub in no yes; do
+    h=$(new_home); conf "$h" "PUBLISH_STATE=$pub"
+    WREset=$((NOW + 113000))                       # 1d 7h left: day 6 of 7
+    render "$h" "$(payload 90 82 $((NOW + 300)) "$WREset")"
+    has "W5-$pub  before the drop, day six of seven"        "d6/7" "$L2"
+    render "$h" "$(payload 3 72 $((NOW + 17000)) "$WREset")"
+    has "W6-$pub  a drop landing at 72% is NOT a restart"   "d6/7" "$L2"
+    has "W7-$pub  so the daily share stays a seventh"       "today still 13.7%" "$L2"
+    hasnt "W8-$pub  and nothing reads as overspent"         "today over by" "$L2"
+    quiet "W9-$pub"
+done
+
+# THE EDGE, IN BOTH DIRECTIONS. 15% is the line: at or below it the counter is treated as
+# having gone back to the start, above it the fall is the server correcting its own number.
+# Testing one side only would pass just as happily with no threshold at all.
+for probe in "15 shortens d1/2" "16 holds d6/7"; do
+    set -- $probe
+    landed=$1; expect=$3
+    h=$(new_home); conf "$h" "PUBLISH_STATE=yes"
+    WREset=$((NOW + 113000))
+    render "$h" "$(payload 90 $((landed + 10)) $((NOW + 300)) "$WREset")"
+    render "$h" "$(payload 3 "$landed" $((NOW + 17000)) "$WREset")"
+    has "W10-$landed  landing at $landed% $2 the window" "$expect" "$L2"
+done
+
 # =============================================================== 6. installer
 # ============================================== 9. the bmad-loop run's own line
 # The run block used to ride at the END of line 2, after both quota windows and the

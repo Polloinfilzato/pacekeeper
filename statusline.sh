@@ -636,7 +636,24 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         fi
         if [ -z "$_qo_origin" ]; then
             _qo_origin=$(( week_reset - 604800 ))          # finestra nuova: origine nominale
-        elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null; then
+        # A RESTART LEAVES THE COUNTER NEAR ZERO -- A DROP ALONE IS NOT ONE.
+        # The drop test was written from the Fable 5.1 event (36% -> 1%), where the counter
+        # really had gone back to the start. It says nothing about where the counter LANDED,
+        # so any fall of ten points qualified. Measured 2026-09-11 at 00:10: the figure fell
+        # from 82% to 72% at an unchanged deadline, this branch declared a restart, and the
+        # origin moved to `now` -- leaving a counter "just restarted" that read 72% six
+        # minutes later, which is self-contradictory on its face. The window shrank from 7
+        # days to 2, `d6/7 (today still 13.7%)` became `d1/2 (today over by 22.0%)`, and
+        # `quota-semaforo` turned RED and would have denied every launch of the night on a
+        # figure that was never true.
+        # So the landing point has to be low as well. 15% is deliberately loose: a real
+        # restart lands at 0-2% (1% in the measured case), and the extra headroom covers a
+        # window that restarts while a request is already in flight. Above it, a drop is the
+        # server correcting its own number -- good news, and the nominal window still holds.
+        # It errs the PERMISSIVE way ONLY where the premise is impossible anyway, which is
+        # the one place the strict default buys nothing.
+        elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null \
+             && [ "$_wp_int" -le 15 ] 2>/dev/null; then
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
         fi
         # Per-process temporary name: two redraws landing together must not share one.

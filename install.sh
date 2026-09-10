@@ -20,7 +20,7 @@
 #     message then gets printed over a failure.
 set -euo pipefail
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
