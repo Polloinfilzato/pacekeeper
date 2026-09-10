@@ -650,8 +650,18 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # restart lands at 0-2% (1% in the measured case), and the extra headroom covers a
         # window that restarts while a request is already in flight. Above it, a drop is the
         # server correcting its own number -- good news, and the nominal window still holds.
-        # It errs the PERMISSIVE way ONLY where the premise is impossible anyway, which is
-        # the one place the strict default buys nothing.
+        # KNOWN LIMIT, raised by an adversarial review and kept on purpose. A genuine restart
+        # whose FIRST sample already reads above 15% is taken for a correction and the nominal
+        # window is kept, which is permissive. It takes all three at once: a restart at an
+        # unchanged deadline, no render on this machine in between, and the missing usage spent
+        # elsewhere -- the quota is per account, this status line is per machine. It cannot be
+        # settled from the payload: `used_percentage` and `resets_at` are all it carries, with
+        # no identity for the window itself (checked against claude-code 2.1.268).
+        # The reviewer's alternative -- publish nothing in the ambiguous case and let readers
+        # fail closed -- is worse, and it is worse on the case that actually happened: it is the
+        # RED of 2026-09-11 under another name, denying a night of launches on an account that
+        # was 13.7 points UNDER its own average. An unresolvable ambiguity is traded, not fixed;
+        # this trade favours the measured case over the conjectured one.
         elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null \
              && [ "$_wp_int" -le 15 ] 2>/dev/null; then
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
