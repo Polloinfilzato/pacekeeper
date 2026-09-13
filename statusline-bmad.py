@@ -127,6 +127,11 @@ def main():
     now = datetime.datetime.now(datetime.timezone.utc)
 
     listing = run_json(["list", "--json", "--project", project])
+    if listing is None:
+        # The PROBE failed (timeout, unreadable JSON) - that is not "no run". The
+        # caller keeps its last good reading instead of caching a false absence.
+        print("FAIL")
+        return
     if not listing:
         print("NONE")
         return

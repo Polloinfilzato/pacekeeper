@@ -16,6 +16,139 @@
 #   - bmad-loop / BMAD Method updates, ONLY when one is available, with the new version
 #     in brackets. Never fetched on the drawing path: see the block's own comment.
 #   - session cost (API users only, above $0.01)
+#   - `auto·presente` / `auto·assente`, ONLY on the line of the session that is the main of a
+#     live autonomous session (/auto). Details and the self-test in the block just below.
+
+# --- Autonomous mode: is THIS session the main of a live /auto session, and is Ema here? ---
+# Ema, 2026-09-13 21:22: «io in questo momento non ho presente se questa specifica sessione
+# sia governata dalla modalità automatica o meno … vorrei che appaia nella status line anche
+# l'indicatore che dice modalità auto attiva ed anche con la sottomodalità, cioè se io gli ho
+# detto presente o assente».
+#
+# WHAT DECIDES "auto". `auto-init.sh:58` writes the driving session's id into
+# <dir>/MAIN_SESSION_ID for every auto session it creates under ~/.claude/auto-sessions/, and
+# the status line JSON carries `session_id` (2.1.270 binary: `session_id:e.id,
+# transcript_path:yf(e.id)` — the transcript is NAMED after the id, which is why the other
+# blocks here derive the id from the transcript's basename; that stays the fallback). So:
+# this session is auto when its id is the content of some <dir>/MAIN_SESSION_ID whose
+# <dir>/QUEUE.md exists. The NEWEST such dir decides (names are timestamps, so the glob's
+# order is the clock). A session whose Claude process has ended never draws a status line,
+# so a stale marker of a dead session cannot light this up; the one residual case is the same
+# process outliving its auto session with no closing marker written — see CLOSED below.
+# NOTE the one place this can disagree with the gate: guard-pace-gate.sh:233-236 reads ONLY
+# <CURRENT>/MAIN_SESSION_ID, this block reads every dir. With one auto session alive they
+# say the same thing; with two (measured 2026-09-13 22:30: CURRENT → 20260913-1724 while
+# the session driving 20260913-1156 was still working) each of the two mains reads `auto`
+# here, and the gate treats only the CURRENT one as such. Ema was already asked which is
+# the main (20260913-1724/QUEUE.md, «Cosa aspetta Ema»); the line reports the files as
+# they are and does not pick a side.
+#
+# CLOSED. There is NO marker that the auto scripts write when a session ends (measured
+# 2026-09-13: `grep -rn CLOSED- skills/auto hooks` finds nothing that writes one). What exists
+# on disk is hand-written: <dir>/STOP.md (20260902-2139), <dir>/ANNULLATA.md (20260814-0224),
+# and a top-level CLOSED-<dir> file (CLOSED-20260823-2106). Those three shapes, plus <dir>/CLOSED
+# for whoever writes one next, are what "closed" means here. `QUEUE-EMPTY` in ALERTS.md is NOT
+# closed: it is the watcher's natural end, and 7 of 7 sessions that reached it kept writing
+# QUEUE.md afterwards (up to 24 h later).
+#
+# PRESENCE. The same rule as guard-pace-gate.sh:109-111: one `read -r` of
+# ~/.claude/triade/PRESENZA; the exact word `presente` is present, anything else — missing
+# file, empty, `forse`, a trailing CR — is `assente`. Identical code, identical verdict.
+#
+# COST. The line is redrawn every 8 s: this is one glob over ~60 directories, `[ -f ]` tests and
+# `read` builtins — no fork. Measured 2026-09-13: 52 candidate dirs, 0.027 s including bash's
+# own start-up. Nothing is cached, because the thing that changes (PRESENZA) changes by his hand.
+#
+# Overrides, for the self-test only: PACEKEEPER_AUTO_SESSIONS_DIR, PACEKEEPER_PRESENZA_FILE.
+# Off switch: DISABLE=auto in subscription.conf, like every other block.
+#
+# falsifier: write this session's id into a fresh <dir>/MAIN_SESSION_ID with a QUEUE.md and
+# the segment does not appear within 8 s; or `auto-init.sh` grows a closing marker with a name
+# not listed above and a closed session keeps showing `auto·…`.
+pk_auto_label() {
+    local sid=$1
+    local base="${PACEKEEPER_AUTO_SESSIONS_DIR:-$HOME/.claude/auto-sessions}"
+    local pres="${PACEKEEPER_PRESENZA_FILE:-$HOME/.claude/triade/PRESENZA}"
+    local d hit="" m p
+    [ -n "$sid" ] || return 0
+    [ -d "$base" ] || return 0
+    for d in "$base"/*/; do
+        d=${d%/}
+        [ -f "$d/MAIN_SESSION_ID" ] && [ -f "$d/QUEUE.md" ] || continue
+        m=""
+        read -r m < "$d/MAIN_SESSION_ID" 2>/dev/null
+        [ "$m" = "$sid" ] && hit=$d
+    done
+    [ -n "$hit" ] || return 0
+    # the newest matching dir decides, and a closed one closes the question
+    [ -e "$hit/STOP.md" ] && return 0
+    [ -e "$hit/ANNULLATA.md" ] && return 0
+    [ -e "$hit/CLOSED" ] && return 0
+    [ -e "$base/CLOSED-${hit##*/}" ] && return 0
+    p=""
+    [ -r "$pres" ] && read -r p < "$pres" 2>/dev/null
+    case "$p" in
+        presente) printf 'auto·%s' "${T_AUTO_PRESENT:-presente}" ;;
+        *)        printf 'auto·%s' "${T_AUTO_ABSENT:-assente}" ;;
+    esac
+}
+
+# `statusline.sh --self-test-auto`: the block above against a throwaway tree, never the real
+# files. Prints one line per case and `casi=N passati=N falliti=N`; exit 1 when any failed.
+# It runs BEFORE stdin is read, so it can be called from a terminal with nothing piped in.
+if [ "${1:-}" = "--self-test-auto" ]; then
+    _st_tmp=$(mktemp -d "${TMPDIR:-/tmp}/pk-auto-selftest.XXXXXX") || exit 2
+    _st_base="$_st_tmp/auto-sessions"; _st_pres="$_st_tmp/PRESENZA"
+    _st_n=0; _st_ok=0; _st_ko=0
+    _st_mk() {  # <dir-name> <session-id> [extra file names...]
+        local d="$_st_base/$1"; shift; local sid=$1; shift
+        mkdir -p "$d/reports"; printf '%s\n' "$sid" > "$d/MAIN_SESSION_ID"; : > "$d/QUEUE.md"
+        local f; for f in "$@"; do : > "$d/$f"; done
+    }
+    _st_case() {  # <name> <expected> <session-id> [auto-sessions dir, default the fake one]
+        local got
+        got=$(PACEKEEPER_AUTO_SESSIONS_DIR="${4:-$_st_base}" PACEKEEPER_PRESENZA_FILE="$_st_pres" pk_auto_label "$3")
+        _st_n=$(( _st_n + 1 ))
+        if [ "$got" = "$2" ]; then
+            _st_ok=$(( _st_ok + 1 )); printf '  ok   %-44s -> %s\n' "$1" "${got:-<vuoto>}"
+        else
+            _st_ko=$(( _st_ko + 1 )); printf '\033[31m  KO   %-44s -> atteso %s, ottenuto %s\033[0m\n' "$1" "${2:-<vuoto>}" "${got:-<vuoto>}"
+        fi
+    }
+    mkdir -p "$_st_base"
+    _st_mk 20260101-0100 sid-a
+    printf 'presente\n' > "$_st_pres"
+    _st_case "a: id nella dir, PRESENZA=presente"            "auto·presente" sid-a
+    rm -f "$_st_pres"
+    _st_case "b: stesso id, PRESENZA mancante"               "auto·assente"  sid-a
+    printf 'assente\n' > "$_st_pres"
+    _st_case "b2: PRESENZA=assente"                          "auto·assente"  sid-a
+    printf '  presente  \n' > "$_st_pres"
+    _st_case "b3: PRESENZA=presente con spazi intorno"       "auto·presente" sid-a
+    printf 'forse\n' > "$_st_pres"
+    _st_case "b4: PRESENZA=forse"                            "auto·assente"  sid-a
+    printf 'presente\n' > "$_st_pres"
+    _st_case "c: id assente da ogni dir"                     ""              sid-nope
+    _st_case "c2: id vuoto"                                  ""              ""
+    _st_mk 20260101-0200 sid-d STOP.md
+    _st_case "d: dir chiusa da STOP.md"                      ""              sid-d
+    _st_mk 20260101-0210 sid-d2 ANNULLATA.md
+    _st_case "d2: dir chiusa da ANNULLATA.md"                ""              sid-d2
+    _st_mk 20260101-0220 sid-d3 CLOSED
+    _st_case "d3: dir chiusa da CLOSED"                      ""              sid-d3
+    _st_mk 20260101-0230 sid-d4; : > "$_st_base/CLOSED-20260101-0230"
+    _st_case "d4: dir chiusa da CLOSED-<dir> al livello sopra" ""            sid-d4
+    mkdir -p "$_st_base/20260101-0300"; printf 'sid-e\n' > "$_st_base/20260101-0300/MAIN_SESSION_ID"
+    _st_case "e: MAIN_SESSION_ID senza QUEUE.md"             ""              sid-e
+    _st_mk 20260101-0400 sid-f; _st_mk 20260101-0500 sid-f STOP.md
+    _st_case "f: due dir, la più nuova chiusa -> vince lei"  ""              sid-f
+    _st_mk 20260101-0600 sid-g STOP.md; _st_mk 20260101-0700 sid-g
+    _st_case "f2: due dir, la più nuova aperta -> vince lei" "auto·presente" sid-g
+    _st_case "h: cartella auto-sessions inesistente"         ""              sid-a "$_st_tmp/non-esiste"
+    rm -rf "$_st_tmp"
+    printf 'casi=%s passati=%s falliti=%s\n' "$_st_n" "$_st_ok" "$_st_ko"
+    [ "$_st_ko" -eq 0 ] && exit 0 || exit 1
+fi
 
 input=$(cat)
 
@@ -34,6 +167,7 @@ input=$(cat)
     read -r five_reset
     read -r week_reset
     read -r effort_level
+    read -r session_id
 } <<EOF
 $(echo "$input" | jq -r '
     (.workspace.current_dir // ""),
@@ -44,7 +178,8 @@ $(echo "$input" | jq -r '
     (.rate_limits.seven_day.used_percentage // .rate_limits.sevenDay.usedPercentage // .rateLimits.sevenDay.usedPercentage // ""),
     (.rate_limits.five_hour.resets_at // .rate_limits.fiveHour.resetsAt // .rateLimits.fiveHour.resetsAt // ""),
     (.rate_limits.seven_day.resets_at // .rate_limits.sevenDay.resetsAt // .rateLimits.sevenDay.resetsAt // ""),
-    (.effort.level // "")
+    (.effort.level // ""),
+    (.session_id // "")
 ' 2>/dev/null)
 EOF
 
@@ -209,7 +344,7 @@ fi
 # behaves exactly as it did before, which is the requirement for handing it to anyone.
 #   UI_LANG=it|en|auto   language of the labels (auto = from the locale)
 #   PUBLISH_STATE=yes|no write the quota numbers to file for other tools
-#   DISABLE=a,b,c        blocks to switch off: git,cache,plan,bmad,cost
+#   DISABLE=a,b,c        blocks to switch off: git,cache,plan,bmad,cost,auto
 # OFF unless the config says exactly `yes`. It used to default to "yes", with only the
 # installer writing "no" - so anyone who copied this file by hand published their paths,
 # session ids and usage figures without being asked. The default has to be the safe one:
@@ -249,6 +384,7 @@ if [ "$LANG_IT" = 1 ]; then
     T_INTERRUPTED="INTERROTTA"; T_UNKNOWN="STATO IGNOTO"
     T_DEFERRED="rinviati";  T_GRACEFUL="stop a fine storia"
     T_CACHE="cache"
+    T_AUTO_PRESENT="presente"; T_AUTO_ABSENT="assente"
 else
     T_LEFT="left";         T_RESETS="resets in";      T_STILL="today still"
     T_OVER="today over by"; T_SUB="plan";             T_BILL="billed"
@@ -260,6 +396,7 @@ else
     T_INTERRUPTED="INTERRUPTED"; T_UNKNOWN="UNKNOWN STATE"
     T_DEFERRED="deferred";  T_GRACEFUL="stop after story"
     T_CACHE="cache"
+    T_AUTO_PRESENT="present";  T_AUTO_ABSENT="away"
 fi
 # Key = the working path made safe for a filename. CAREFUL: in bash ${var: -N} on a
 # string shorter than N returns the EMPTY string (zsh returns the whole thing instead):
@@ -1117,7 +1254,13 @@ if ! pk_off bmad && command -v bmad-loop >/dev/null 2>&1 && [ -f "$HOME/.claude/
     fi
     if [ -z "$_bm_fresh" ]; then
         _bm_payload=$(python3 "$HOME/.claude/statusline-bmad.py" "$cwd" 2>/dev/null)
-        [ -z "$_bm_payload" ] && _bm_payload="NONE"
+        # FAIL (or nothing at all) = the probe could not read, NOT "no run": a run that is
+        # alive must not vanish for a cached minute because bmad-loop was slow once
+        # (measured 2026-09-13 under load 8). Keep the last good reading, if any.
+        case "$_bm_payload" in FAIL|"")
+            _bm_payload=$( [ -f "$_bm_cache" ] && tail -n +2 "$_bm_cache" 2>/dev/null )
+            [ -z "$_bm_payload" ] && _bm_payload="NONE" ;;
+        esac
         if [ "$_bm_payload" = "NONE" ]; then _bm_ttl=60; else _bm_ttl=30; fi
         mkdir -p "$cache_dir" 2>/dev/null
         _bm_tmp="${_bm_cache}.$$"
@@ -2165,6 +2308,25 @@ if [ -n "$effort_level" ]; then
     effort_info=" ${GRAY}[${effort_level}]${RESET}"
 fi
 
+# --- Autonomous mode + presence (the block is explained at the top of the file) ---
+# `session_id` from the JSON first; the transcript's basename is the same id (the binary
+# names the transcript after it) and stays as the fallback for a JSON without the field.
+# Colours: `auto` in cyan like every highlighted name here; `presente` green because with
+# him at the keyboard the gates treat the session as attended, `assente` orange because
+# that is the state the gates protect — the same orange as "changes" and "paused".
+auto_info=""
+if ! pk_off auto; then
+    _au_sid=$session_id
+    if [ -z "$_au_sid" ] && [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ]; then
+        _au_sid=${transcript_path##*/}; _au_sid=${_au_sid%.jsonl}
+    fi
+    _au_label=$(pk_auto_label "$_au_sid")
+    case "$_au_label" in
+        "auto·${T_AUTO_PRESENT}") auto_info=" ${GRAY}[${CYAN}auto${GRAY}·${GREEN}${T_AUTO_PRESENT}${GRAY}]${RESET}" ;;
+        "auto·${T_AUTO_ABSENT}")  auto_info=" ${GRAY}[${CYAN}auto${GRAY}·${ORANGE}${T_AUTO_ABSENT}${GRAY}]${RESET}" ;;
+    esac
+fi
+
 # --- The session cache: warm or cold ---
 # With a warm cache a turn RE-READS the context at a fraction of the price; with a cold one it
 # buys the whole thing again. It is there to decide whether to pick the work back up now or
@@ -2221,7 +2383,7 @@ printf "%s%s%s%s%s %s%s%s\n" \
     "${cache_info}" \
     "${plan_info}" \
     "${GRAY}[${model}]${RESET}" \
-    "${effort_info}" \
+    "${effort_info}${auto_info}" \
     "${cost_info}"
 
 # Line 2: the usage windows in detail (Claude.ai subscribers only)
