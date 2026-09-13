@@ -1200,6 +1200,13 @@ grep -q '^PUBLISH_STATE=no' "$h/.claude/subscription.conf" && ok \
 install_into "$h" --yes
 equals "I3  a second install over the first" "0" "$?"
 
+# An UPDATE with --yes must not flip publishing off for someone who had said yes: the
+# key is written "no" only when it is absent (a first install).
+conf "$h" "$(printf 'PUBLISH_STATE=yes\nRENEWAL_DAY=3\n')"
+install_into "$h" --yes
+grep -q '^PUBLISH_STATE=yes' "$h/.claude/subscription.conf" && ok \
+    || bad "I3b --yes on an update keeps PUBLISH_STATE=yes" "PUBLISH_STATE=yes" "$(cat "$h/.claude/subscription.conf")"
+
 h=$(new_home)
 printf '#!/bin/sh\necho THE-USERS-OWN-LINE\n' > "$h/.claude/statusline.sh"
 printf '{}\n' > "$h/.claude/settings.json"

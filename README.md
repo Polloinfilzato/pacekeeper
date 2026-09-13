@@ -22,6 +22,93 @@ goes red, you are borrowing from tomorrow.
 
 ---
 
+## Install
+
+```bash
+git clone https://github.com/Polloinfilzato/pacekeeper.git
+cd pacekeeper
+./install.sh
+```
+
+Or, without cloning — note the **version tag**, not a branch, so what you install is something
+that was actually tried rather than whatever was pushed a minute ago:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.3.2/install.sh | bash
+```
+
+The questions still work through a pipe: they are read from your terminal, not from standard
+input. But cloning is listed first on purpose — this is a script that edits your Claude Code
+configuration, and being able to read it before running it should not cost you anything.
+
+The installer asks four short questions, patches `~/.claude/settings.json`, and puts four files
+into `~/.claude`: the status line, its two helpers, and `pacekeeper-quota`.
+
+```bash
+./install.sh --yes        # take every default, ask nothing
+./install.sh --uninstall  # put the machine back the way it was before the first install
+./install.sh --restore    # list every backup with its date and pick one
+```
+
+**Nothing is overwritten without a backup**, named `<file>.pacekeeper-<date>-<time>.bak` next to
+the original, and a backup is never overwritten either — not even by another backup taken in the
+same second. If you already have a status line, it says so, shows you what it is, and asks before
+replacing it. A symlink in place of any file it would touch stops the install rather than being
+written through.
+
+Each install also writes a **manifest** under `~/.claude/.pacekeeper/`, recording which files
+existed beforehand. That is what makes uninstall honest: a backup file can say *what a file used to
+contain*, but only the manifest can say *this file did not exist at all* — so `--uninstall` puts
+back what was yours and removes what was ours, including the runtime state written since. Undoing
+is itself undoable: whatever was in place a moment ago is backed up first.
+
+### Requirements
+
+| | |
+|---|---|
+| **Claude Code** | built and tested against 2.1.259 |
+| **bash** | 3.2+ — the bash macOS already ships is enough |
+| **jq**, **python3** | required |
+| **git** | optional; the git block hides without it |
+| **A Nerd Font** | optional; only the git icons need it |
+
+**Tested on macOS only.** The shell is written to be portable and the one BSD-specific call is
+guarded with a GNU fallback, but nobody has run this on Linux yet — so treat Linux as unverified
+rather than supported, and please report what happens.
+
+**It depends on fields Anthropic does not document.** The whole thing is built on the JSON Claude
+Code hands to a status line command, whose shape is not part of any published contract. Every
+block degrades to silence when a field it wants is missing, which is the only guarantee that can
+honestly be offered: an update could take any of these numbers away without warning.
+
+---
+
+## Update
+
+The same command, at the newer tag — the installer is the updater:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.3.2/install.sh | bash
+```
+
+or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
+
+- it notices a status line is configured (yours), backs it up like any other file, and asks
+  before replacing it — that is the update; answer yes;
+- **your settings survive.** `~/.claude/subscription.conf` is amended key by key, never rewritten:
+  the renewal date stays (leave the question blank), and the four questions are asked again — the
+  defaults offered are the factory ones, not your previous answers, so answer as you did before.
+  With `--yes` nothing is asked and nothing of yours is changed — an update with `--yes` is a
+  two-second, no-questions refresh of the five files;
+- the runtime state (`quota-origin`, the shared snapshot) is left where it is, so the line does not
+  forget the mid-window restart it had already seen;
+- if the new version disappoints, `./install.sh --restore` lists every backup with its date and
+  puts the previous one back.
+
+There is no separate version command: the tag in the URL you ran is the version you have.
+
+---
+
 ## Why another status line
 
 There are good ones already, and most of them are prettier. This one exists because it survives
@@ -117,6 +204,7 @@ never render at all.
 | **Plan register** | `⛭ 2/3 · 4/9` | when a long-running plan file exists |
 | **Model** | `[Opus 5]` | always |
 | **Effort** | `[high]` | when a reasoning effort level is set |
+| **Auto** | `[auto·presente]` / `[auto·assente]` | only in the session driving an unattended `/auto` run — see below |
 | **Session cost** | `≈$0.42` | **API users only** — hidden on subscriptions, where it would be a fiction |
 
 **Git.** `*` means tracked changes, `+` means untracked files, `↑N` commits you have not pushed,
@@ -140,6 +228,13 @@ than the conversation. `2/3 · 4/9` reads: **4 of 9 tasks done across the whole 
 in piece 3, where 2 of its tasks are done. The total comes first because it is the number people
 say out loud. It reads both markdown table rows and `- [x]` checklists, and it
 fades out ten minutes after the plan is complete instead of sitting there forever.
+
+**Auto.** For people who run Claude Code unattended through the author's `/auto` skill (shipped
+separately): the session that drives such a run says so, and whether the human declared himself
+present or away — because a queue of guards behaves differently in the two cases, and the one
+question you ask when you sit back down is *«is this the session that is running the night?»*.
+It reads the markers that skill writes under `~/.claude/auto-sessions/`; with nothing there it
+never appears. `DISABLE=auto` switches it off.
 
 **Session cost.** A theoretical pay-per-use figure summed from the transcript at list API prices.
 It is deliberately **hidden for Claude.ai subscribers**, because for them it does not correspond to
@@ -299,6 +394,13 @@ forever — with the state as a symbol when things are fine and as a word when t
 
 A run you stopped yourself stays silent: you already know.
 
+**A run that is alive does not blink.** The line is drawn from a probe that asks `bmad-loop` what is
+running, and the answer is cached for half a minute. When the probe itself fails — the machine is
+saturated and `bmad-loop` does not answer in time, or the state file is caught mid-write — the
+line keeps its last good reading instead of caching «no run» for a minute and making a live run
+vanish from under you. Measured on a loaded machine before it was fixed: the block disappeared
+for sixty seconds at a time while the run was fine.
+
 It reads `--json`, which bmad-loop documents as its stable machine-readable contract, and it
 handles the fact that `list` and `status` do not use the same vocabulary for the same run.
 
@@ -412,67 +514,6 @@ invitation to a bug that you do not need to accept.
 
 ---
 
-## Install
-
-```bash
-git clone https://github.com/Polloinfilzato/pacekeeper.git
-cd pacekeeper
-./install.sh
-```
-
-Or, without cloning — note the **version tag**, not a branch, so what you install is something
-that was actually tried rather than whatever was pushed a minute ago:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.3.1/install.sh | bash
-```
-
-The questions still work through a pipe: they are read from your terminal, not from standard
-input. But cloning is listed first on purpose — this is a script that edits your Claude Code
-configuration, and being able to read it before running it should not cost you anything.
-
-The installer asks four short questions, patches `~/.claude/settings.json`, and puts four files
-into `~/.claude`: the status line, its two helpers, and `pacekeeper-quota`.
-
-```bash
-./install.sh --yes        # take every default, ask nothing
-./install.sh --uninstall  # put the machine back the way it was before the first install
-./install.sh --restore    # list every backup with its date and pick one
-```
-
-**Nothing is overwritten without a backup**, named `<file>.pacekeeper-<date>-<time>.bak` next to
-the original, and a backup is never overwritten either — not even by another backup taken in the
-same second. If you already have a status line, it says so, shows you what it is, and asks before
-replacing it. A symlink in place of any file it would touch stops the install rather than being
-written through.
-
-Each install also writes a **manifest** under `~/.claude/.pacekeeper/`, recording which files
-existed beforehand. That is what makes uninstall honest: a backup file can say *what a file used to
-contain*, but only the manifest can say *this file did not exist at all* — so `--uninstall` puts
-back what was yours and removes what was ours, including the runtime state written since. Undoing
-is itself undoable: whatever was in place a moment ago is backed up first.
-
-### Requirements
-
-| | |
-|---|---|
-| **Claude Code** | built and tested against 2.1.259 |
-| **bash** | 3.2+ — the bash macOS already ships is enough |
-| **jq**, **python3** | required |
-| **git** | optional; the git block hides without it |
-| **A Nerd Font** | optional; only the git icons need it |
-
-**Tested on macOS only.** The shell is written to be portable and the one BSD-specific call is
-guarded with a GNU fallback, but nobody has run this on Linux yet — so treat Linux as unverified
-rather than supported, and please report what happens.
-
-**It depends on fields Anthropic does not document.** The whole thing is built on the JSON Claude
-Code hands to a status line command, whose shape is not part of any published contract. Every
-block degrades to silence when a field it wants is missing, which is the only guarantee that can
-honestly be offered: an update could take any of these numbers away without warning.
-
----
-
 ## Configuration
 
 Everything lives in `~/.claude/subscription.conf`, which the installer writes for you.
@@ -482,7 +523,13 @@ RENEWAL_DAY=3          # monthly renewal, the 3rd of each month
 RENEWAL_TIME=15:41     # local time of the charge — optional, but it makes "today" precise
 # RENEWAL=2027-03-14   # or a fixed date, with PERIOD=yearly if it recurs
 # TIER=Max 5x          # override the plan name; normally it is read from your account
+UI_LANG=auto           # it | en | auto (from your locale) — the language of the labels
+PUBLISH_STATE=no       # yes = write the quota numbers to disk for other tools (see the sensor section)
+# DISABLE=git,cache    # blocks to switch off: git, cache, plan, bmad, cost, auto
 ```
+
+Every key is optional: with no file at all the line still draws, it just cannot know your renewal
+date and assumes nothing about it.
 
 ### Finding your renewal date and time
 

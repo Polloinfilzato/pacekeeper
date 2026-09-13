@@ -20,7 +20,7 @@
 #     message then gets printed over a failure.
 set -euo pipefail
 
-VERSION="1.3.1"
+VERSION="1.3.2"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
@@ -661,8 +661,10 @@ if [ "$ASSUME_YES" = 0 ]; then
     [ -n "$RENEWAL_TIME" ] && set_key RENEWAL_TIME "$RENEWAL_TIME"
     say "  settings written to $CONF"
 else
-    # --yes must not turn on data publication by omission. It is written explicitly.
-    set_key PUBLISH_STATE "no"
+    # --yes must not turn on data publication by omission: on a FIRST install the key is
+    # written as "no" explicitly. On an update it is left alone — a re-run with --yes used
+    # to switch publishing off for whoever had said yes, silently.
+    grep -q '^[[:space:]]*PUBLISH_STATE[[:space:]]*=' "$CONF" || set_key PUBLISH_STATE "no"
 fi
 chmod 600 "$CONF" 2>/dev/null || true
 
