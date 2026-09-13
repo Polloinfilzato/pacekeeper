@@ -242,6 +242,16 @@ finding it, including the exact prompt to hand to Claude Code so it can look it 
 The countdown knows the *instant*, not just the day: a subscription that renewed at 15:41 stops
 saying "today" at 15:41, not at midnight.
 
+**And it follows an upgrade.** An upgrade is charged at once and restarts the billing cycle from
+that moment (measured on a receipt: the unused days of the old plan refunded pro rata, the
+anniversary moved to the day of the upgrade); a downgrade is scheduled and lands on the old
+anniversary. So when the plan name changes, pacekeeper appends a line to
+`~/.claude/plan-changes.log` with the interval the change must have happened in, and on an
+upgrade rewrites `RENEWAL_DAY` and `RENEWAL_TIME` to the moment it was noticed — which is when
+Claude Code next refreshed your profile, not when the card was charged. The exact minute is on the
+receipt e-mail; the note it leaves in the config says so. A `TIER=` override, or a fixed
+`RENEWAL=` date, switches this off: a hand-typed plan is a statement, not an observation.
+
 ### One five-hour reading, shared by every session
 
 Claude Code hands **each session its own snapshot** of the rate limits, taken at that
@@ -501,8 +511,8 @@ instead of switching over at the exact hour.
 ## Tests
 
 ```sh
-./tests/run.sh            # 106 cases, about ten seconds
-./tests/run.sh --prove    # put eight repaired defects back, one at a time, and watch it go red
+./tests/run.sh            # 263 cases, about a minute
+./tests/run.sh --prove    # put 24 repaired defects back, one at a time, and watch it go red
 ```
 
 Every case runs against a throwaway `$HOME` and a throwaway `TMPDIR`. Nothing here ever touches

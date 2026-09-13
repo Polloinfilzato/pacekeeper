@@ -153,6 +153,16 @@ pk_mtime() {
         stat -f %m "$1" 2>/dev/null || echo 0
     fi
 }
+# An epoch formatted in LOCAL time: `date -r` on BSD, `date -d @` on GNU. Empty on a
+# non-number rather than "now", because "now" is the one wrong answer that looks right.
+pk_date() {
+    case "$1" in *[!0-9]*|"") return 0 ;; esac
+    if [ "$PK_STAT" = gnu ] || { [ -z "$PK_STAT" ] && stat -c %Y / >/dev/null 2>&1; }; then
+        date -d "@$1" "$2" 2>/dev/null
+    else
+        date -r "$1" "$2" 2>/dev/null
+    fi
+}
 
 GIT_CACHE_TTL=6
 # The user id in the name: on Linux TMPDIR is often unset and everything lands in /tmp,
@@ -1500,6 +1510,108 @@ if [ -z "$tier_label" ]; then
         tmp_tier="${tier_cache}.$$"
         printf '%s %s' "$(( now + 21600 ))" "$tier_label" > "$tmp_tier" 2>/dev/null &&
             mv -f "$tmp_tier" "$tier_cache" 2>/dev/null
+    fi
+fi
+
+# --- A plan that CHANGED: write down when, and on an upgrade move the billing anniversary ---
+# The plan name follows the account on its own (above); the renewal date does not, it is a
+# line typed into subscription.conf. Those two facts disagree the moment the plan changes,
+# because of how Anthropic bills a change - measured on the receipts of one account:
+#   - an UPGRADE is charged at once and RESTARTS the cycle from that instant. Receipt of
+#     2026-08-03: "Max plan 20x" for "Aug 3 - Sep 3" and the unused days of the old plan
+#     refunded pro rata; the anniversary moved from the 20th to the 3rd. A countdown left on
+#     the old day would then be wrong for a whole month, and it is the countdown nobody
+#     re-checks because it was right yesterday.
+#   - a DOWNGRADE is scheduled and takes effect at the END of the cycle (2026-09-03, charged
+#     at the old anniversary, 15:41 as before). Nothing to move.
+# So: the plan last seen goes into ~/.claude/plan-seen; every change is appended to
+# ~/.claude/plan-changes.log with the interval it must have happened in; and an upgrade
+# rewrites RENEWAL_DAY and RENEWAL_TIME to the moment it was noticed.
+# WHAT "NOTICED" MEANS. The change is seen when Claude Code next refreshes the account
+# profile into ~/.claude.json, not when the card is charged: minutes later, sometimes hours.
+# The exact minute is on the receipt e-mail, and the log line says so - the written time is
+# an upper bound, honest to the minute it was measured, not to the minute it happened.
+# A TIER= override in subscription.conf is a statement, not an observation: while it is
+# there nothing is compared, so a hand-typed plan never fakes an upgrade.
+# A missing plan-seen is the first sighting, and a first sighting is not a change: a fresh
+# install must not rewrite anybody's renewal date on the strength of one reading.
+plan_seen="$HOME/.claude/plan-seen"
+plan_log="$HOME/.claude/plan-changes.log"
+if [ -n "$tier_label" ] && [ -f "$HOME/.claude.json" ] \
+   && ! { [ -f "$renew_conf" ] && grep -Eq '^[[:space:]]*TIER[[:space:]]*=' "$renew_conf" 2>/dev/null; }; then
+    _ps_stamp=""; _ps_prev=""
+    [ -f "$plan_seen" ] && IFS=' ' read -r _ps_stamp _ps_prev < "$plan_seen" 2>/dev/null
+    case "$_ps_stamp" in *[!0-9]*|"") _ps_stamp=""; _ps_prev="" ;; esac
+    if [ -z "$_ps_prev" ]; then
+        { printf '%s %s\n' "$now" "$tier_label" > "$plan_seen.tmp.$$" \
+            && mv -f "$plan_seen.tmp.$$" "$plan_seen"; } 2>/dev/null
+    elif [ "$_ps_prev" != "$tier_label" ]; then
+        # One redraw at a time. Several sessions redraw within the same second, and each
+        # would otherwise log the same change and rewrite the same file. A lock nobody
+        # released within a minute belongs to a dead process and is taken over; a lock
+        # somebody else holds means "handled" - this redraw simply moves on.
+        _ps_lock="$HOME/.claude/.plan-seen.lock"
+        _ps_held=no
+        if mkdir "$_ps_lock" 2>/dev/null; then
+            _ps_held=yes
+        elif [ -d "$_ps_lock" ] && [ $(( now - $(pk_mtime "$_ps_lock") )) -gt 60 ] 2>/dev/null; then
+            _ps_dead="$_ps_lock.dead.$$"
+            mv "$_ps_lock" "$_ps_dead" 2>/dev/null && rm -rf "$_ps_dead" 2>/dev/null
+            mkdir "$_ps_lock" 2>/dev/null && _ps_held=yes
+        fi
+        if [ "$_ps_held" = yes ]; then
+            # Written FIRST: whatever fails below, the change is never noticed twice.
+            { printf '%s %s\n' "$now" "$tier_label" > "$plan_seen.tmp.$$" \
+                && mv -f "$plan_seen.tmp.$$" "$plan_seen"; } 2>/dev/null
+            # Pro < Max 5x < Max 20x. Anything else (Team, an unknown label) has no rank,
+            # and a move with no rank on one side is logged and moves nothing.
+            pk_plan_rank() {
+                case "$1" in "Max 20x") echo 3 ;; "Max 5x") echo 2 ;; Pro) echo 1 ;; *) echo 0 ;; esac
+            }
+            _ps_from=$(pk_plan_rank "$_ps_prev"); _ps_to=$(pk_plan_rank "$tier_label")
+            _ps_kind="change"
+            if [ "$_ps_from" -gt 0 ] && [ "$_ps_to" -gt 0 ]; then
+                if [ "$_ps_to" -gt "$_ps_from" ]; then _ps_kind="upgrade"; else _ps_kind="downgrade"; fi
+            fi
+            _ps_day=$(pk_date "$now" '+%-d')
+            _ps_hhmm=$(pk_date "$now" '+%H:%M')
+            _ps_iso=$(pk_date "$now" '+%Y-%m-%dT%H:%M:%S%z')
+            _ps_last=$(pk_date "$_ps_stamp" '+%Y-%m-%dT%H:%M:%S%z')
+            _ps_moved="billing anniversary kept"
+            # Only the monthly form is moved. A fixed RENEWAL= date is a yearly plan, whose
+            # cycle an upgrade does not restart the same way - that one stays hand-written.
+            if [ "$_ps_kind" = upgrade ] && [ -n "$_ps_day" ] && [ -n "$_ps_hhmm" ] \
+               && ! { [ -f "$renew_conf" ] && grep -Eq '^[[:space:]]*RENEWAL[[:space:]]*=' "$renew_conf" 2>/dev/null; }; then
+                # The two lines are REPLACED where they stand, or appended when absent, and
+                # every earlier note of this kind is dropped so that two upgrades leave one
+                # note, not a pile. Through a temporary file: a status line killed mid-write
+                # must not leave a half-written configuration behind.
+                _ps_tmp="$renew_conf.tmp.$$"
+                { [ -f "$renew_conf" ] && cat "$renew_conf"; } 2>/dev/null \
+                | awk -v day="$_ps_day" -v hhmm="$_ps_hhmm" -v iso="$_ps_iso" -v from="$_ps_prev" -v to="$tier_label" '
+                    /^[[:space:]]*RENEWAL_DAY[[:space:]]*=/  { if (!d) { print "RENEWAL_DAY=" day; d=1 }; next }
+                    /^[[:space:]]*RENEWAL_TIME[[:space:]]*=/ { if (!t) { print "RENEWAL_TIME=" hhmm; t=1 }; next }
+                    /^# pacekeeper: / { next }
+                    { print }
+                    END {
+                        if (!d) print "RENEWAL_DAY=" day
+                        if (!t) print "RENEWAL_TIME=" hhmm
+                        print "# pacekeeper: " iso " upgrade " from " -> " to " restarted the cycle; day and time set to when it was noticed. The receipt e-mail has the exact minute - correct RENEWAL_TIME from there."
+                    }' > "$_ps_tmp" 2>/dev/null \
+                && mv -f "$_ps_tmp" "$renew_conf" 2>/dev/null \
+                && _ps_moved="RENEWAL_DAY=$_ps_day RENEWAL_TIME=$_ps_hhmm written"
+                rm -f "$_ps_tmp" 2>/dev/null
+            fi
+            printf '%s %s %s -> %s (last seen as %s at %s; %s)\n' \
+                "$_ps_iso" "$_ps_kind" "$_ps_prev" "$tier_label" "$_ps_prev" "${_ps_last:-?}" "$_ps_moved" \
+                >> "$plan_log" 2>/dev/null
+            rmdir "$_ps_lock" 2>/dev/null
+        fi
+    elif [ $(( now - _ps_stamp )) -ge 300 ] 2>/dev/null; then
+        # Same plan: the stamp is refreshed now and then, so that the "last seen" bound on
+        # a future change stays tight without rewriting the file on every redraw.
+        { printf '%s %s\n' "$now" "$tier_label" > "$plan_seen.tmp.$$" \
+            && mv -f "$plan_seen.tmp.$$" "$plan_seen"; } 2>/dev/null
     fi
 fi
 

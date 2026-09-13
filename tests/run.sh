@@ -169,6 +169,14 @@ PY
         "                [ -n \"\$_bm_elapsed\" ] && _bm_body=\"\${_bm_body} \$(fmt_hm \"\$_bm_elapsed\")\"" \
         "                _bm_body=\"\${_bm_body} \$(fmt_hm \"\${_bm_elapsed:-0}\")\""
 
+    prove_one "an upgrade no longer moves the billing anniversary" statusline.sh \
+        "            if [ \"\$_ps_kind\" = upgrade ] && [ -n \"\$_ps_day\" ] && [ -n \"\$_ps_hhmm\" ] \\" \
+        "            if [ \"\$_ps_kind\" = never ] && [ -n \"\$_ps_day\" ] && [ -n \"\$_ps_hhmm\" ] \\"
+
+    prove_one "a downgrade moves the anniversary too" statusline.sh \
+        "                if [ \"\$_ps_to\" -gt \"\$_ps_from\" ]; then _ps_kind=\"upgrade\"; else _ps_kind=\"downgrade\"; fi" \
+        "                _ps_kind=\"upgrade\""
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -299,6 +307,100 @@ hasnt "R11 a time with no date draws no charge" "billed" "$L2"; quiet "R11"
 
 h=$(new_home); : > "$h/.claude/subscription.conf"; render "$h" "$(payload 22.5 41.2)"
 has   "R12 an empty config still shows the plan" "plan" "$L2"; quiet "R12"
+
+# ======================================================== 1b. a plan that changes
+section "A plan that changes: logged always, the anniversary moved only on an upgrade"
+
+# The account profile, rewritten as Claude Code would rewrite it. The mtime is pushed a few
+# seconds ahead on purpose: the plan cache is broken by `-nt`, whose resolution is one
+# second, and a rewrite inside the same second as the previous render would be invisible.
+set_plan() {
+    printf '{\n  "organizationRateLimitTier": "%s"\n}\n' "$2" > "$1/.claude.json"
+    python3 - "$1/.claude.json" <<'PY'
+import os, sys, time
+t = time.time() + 5
+os.utime(sys.argv[1], (t, t))
+PY
+}
+plan_log()  { cat "$1/.claude/plan-changes.log" 2>/dev/null; }
+plan_conf() { cat "$1/.claude/subscription.conf" 2>/dev/null; }
+NOW_HHMM=$(date '+%H:%M')
+
+# P1: the first sighting is remembered and is not a change.
+h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=3\nRENEWAL_TIME=15:41\nPUBLISH_STATE=yes\n')"
+render "$h" "$(payload 22.5 41.2)"
+has    "P1  first sighting goes into plan-seen"        "Max 5x" "$(cat "$h/.claude/plan-seen")"
+equals "P1b first sighting is not logged as a change" ""       "$(plan_log "$h")"
+has    "P1c first sighting leaves the renewal alone"  "RENEWAL_DAY=3" "$(plan_conf "$h")"
+
+# P2: the same plan again is silence.
+render "$h" "$(payload 22.5 41.2)"
+equals "P2  same plan, nothing logged" "" "$(plan_log "$h")"; quiet "P2"
+
+# P3: an upgrade restarts the cycle: day and time move to now, the rest of the file survives.
+set_plan "$h" default_claude_max_20x
+render "$h" "$(payload 22.5 41.2)"; quiet "P3"
+has     "P3  the upgrade is logged"                  "upgrade Max 5x -> Max 20x" "$(plan_log "$h")"
+has     "P3b RENEWAL_DAY moved to today"             "RENEWAL_DAY=$TODAY_DOM"   "$(plan_conf "$h")"
+matches "P3c RENEWAL_TIME moved to now"              "RENEWAL_TIME=$NOW_HHMM|RENEWAL_TIME=$(date '+%H:%M')" "$(plan_conf "$h")"
+hasnt   "P3d the old day is gone"                    "RENEWAL_DAY=3"            "$(plan_conf "$h")"
+has     "P3e the other lines survive"                "PUBLISH_STATE=yes"        "$(plan_conf "$h")"
+has     "P3f the note says where the exact minute is" "receipt"                 "$(plan_conf "$h")"
+equals  "P3g exactly one RENEWAL_DAY line"           "1" "$(grep -c '^RENEWAL_DAY=' "$h/.claude/subscription.conf")"
+has     "P3h plan-seen now says the new plan"        "Max 20x" "$(cat "$h/.claude/plan-seen")"
+render "$h" "$(payload 22.5 41.2)"
+matches "P3i the countdown follows on the next redraw" "billed in (2[89]|3[01])d" "$L2"
+equals  "P3j the change is noticed once"             "1" "$(grep -c upgrade "$h/.claude/plan-changes.log")"
+
+# P4: a downgrade is logged and moves nothing - it takes effect at the old anniversary.
+set_plan "$h" default_claude_max_5x
+render "$h" "$(payload 22.5 41.2)"; quiet "P4"
+has   "P4  the downgrade is logged"          "downgrade Max 20x -> Max 5x" "$(plan_log "$h")"
+has   "P4b the anniversary is kept"          "RENEWAL_DAY=$TODAY_DOM"      "$(plan_conf "$h")"
+has   "P4c and the log says so"              "anniversary kept"            "$(plan_log "$h")"
+
+# P5: two upgrades leave ONE note, not a pile.
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+equals "P5  a second upgrade replaces the note" "1" "$(grep -c '^# pacekeeper: ' "$h/.claude/subscription.conf")"
+equals "P5b and still one RENEWAL_TIME line"   "1" "$(grep -c '^RENEWAL_TIME=' "$h/.claude/subscription.conf")"
+
+# P6: a TIER= override is a statement, not an observation: nothing is compared.
+h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=3\nTIER=Max 5x\n')"
+render "$h" "$(payload 22.5 41.2)"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+equals "P6  an override silences the detector" "" "$(plan_log "$h")"
+has    "P6b and the day stays"                 "RENEWAL_DAY=3" "$(plan_conf "$h")"
+
+# P7: a fixed RENEWAL= date is a yearly plan; the upgrade is logged, the file is not touched.
+h=$(new_home); conf "$h" "RENEWAL=$IN45"
+render "$h" "$(payload 22.5 41.2)"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+has    "P7  the upgrade is logged"          "upgrade"        "$(plan_log "$h")"
+hasnt  "P7b RENEWAL_DAY is not invented"    "RENEWAL_DAY"    "$(plan_conf "$h")"
+has    "P7c the fixed date stays"           "RENEWAL=$IN45"  "$(plan_conf "$h")"
+
+# P8: no config file at all: an upgrade creates one with the two lines.
+h=$(new_home); render "$h" "$(payload 22.5 41.2)"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"; quiet "P8"
+has "P8  a config is born with the day"  "RENEWAL_DAY=$TODAY_DOM" "$(plan_conf "$h")"
+has "P8b and the time"                   "RENEWAL_TIME="          "$(plan_conf "$h")"
+
+# P9: a move with no rank on one side (Team) is a "change": logged, nothing moved.
+h=$(new_home); set_plan "$h" default_claude_team; conf "$h" "RENEWAL_DAY=3"
+render "$h" "$(payload 22.5 41.2)"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+has "P9  an unranked move is logged as a change" "change Team -> Max 20x" "$(plan_log "$h")"
+has "P9b and moves nothing"                      "RENEWAL_DAY=3"          "$(plan_conf "$h")"
+
+# P10: a stale lock from a dead redraw does not silence the detector forever.
+h=$(new_home); conf "$h" "RENEWAL_DAY=3"; render "$h" "$(payload 22.5 41.2)"
+mkdir -p "$h/.claude/.plan-seen.lock"; touch -t 200001010000 "$h/.claude/.plan-seen.lock"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+has "P10 a lock older than a minute is taken over" "upgrade" "$(plan_log "$h")"
+h=$(new_home); conf "$h" "RENEWAL_DAY=3"; render "$h" "$(payload 22.5 41.2)"
+mkdir -p "$h/.claude/.plan-seen.lock"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
+equals "P10b a live lock means somebody else has it" "" "$(plan_log "$h")"
 
 # ============================================================ 2. time grammar
 section "RENEWAL_TIME: one grammar, and no arithmetic before it is checked"
