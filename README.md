@@ -312,6 +312,17 @@ day is taken from the window's real length in seconds, not from a rounded day co
 percentage is the approximation; keep both, because the percentage is also the figure the spend
 guard enforces.
 
+*The two brackets run on two different clocks, and it shows.* The pace `(+17h 15m)` is built from
+the time left to the reset, so it moves every minute whether you work or not. The daily balance
+`(today over by 0.5%)` is built from the used percentage — which Claude Code hands over as a
+**whole number** (30, 31, 32 — never 31.4) — and from the day's ceiling, which does not move until
+the next 08:00. So the balance does not glide: it stands still for as long as the counter stays on
+the same integer, then jumps a full point when the server ticks it over. On a large plan one point
+is a lot of work — measured on 2026-09-15 on Max 20x, it took about fifty minutes of steady use to
+move from 31 to 32. Watching one bracket crawl while the other sits frozen is not a fault; it is
+the signature of that difference, and the granularity is the server's, not this script's — it
+cannot invent decimals it never receives.
+
 *It sits in brackets on the end of the 7-day block, the same shape as the 5-hour one, whenever
 there is room for it.* The information is the same kind, so it should read the same way. But the
 two blocks are not the same length: the 5-hour block carries one bracket group and the 7-day block
