@@ -1075,7 +1075,19 @@ $(LC_ALL=C awk -v p="$week_pct" -v s="$week_rem" -v span="$week_span" -v dsep="$
     if (n > G) n = G;
     idx = G - n + 1; if (idx < 1) idx = 1; if (idx > G) idx = G;
     after = n - 1; if (after < 0) after = 0;   # giorni pieni dopo oggi
-    bal = (100 - (100/G) * after) - p;
+    # THE SHARE OF A FULL DAY FOLLOWS THE CLOCK, NOT THE BUCKET COUNT. `G` is rounded UP, so a
+    # window of 4d7h left after a restart at 00:27 becomes five buckets of 20% - and the first
+    # bucket, seven and a half hours long, is granted the share of a whole day. (No apostrophe
+    # in here: this awk program lives inside single quotes.) Measured 2026-09-15
+    # at 14:09 after a Max 5x -> Max 20x upgrade at 00:27: `today still 10.0%` where the
+    # time-proportional figure is +0.5%, ten points in the PERMISSIVE direction, on the same
+    # line as a `+17h 22m` pace saying the opposite. The pace was cured of exactly this rounding
+    # on 2026-09-05 (022b66a); this is the other half of that repair. For a full window
+    # 100*86400/604800 == 100/7, byte-identical to before; `G` still names the buckets (d2/5),
+    # only the share per full day now comes from the seconds. `after` is 0 whenever span < 1d
+    # (then G = n = 1), so a tiny span cannot blow the share up into the balance.
+    share = 100 * 86400 / span;
+    bal = (100 - share * after) - p;
     txt = sprintf("%.1f", (bal < 0 ? -bal : bal)); sub(/\./, dsep, txt);
     printf "%.0f %s %d %s %d %d", v, col, idx, txt, (bal < 0 ? 1 : 0), G
 }')

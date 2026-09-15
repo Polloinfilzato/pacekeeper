@@ -708,6 +708,23 @@ for pub in no yes; do
     quiet "W9-$pub"
 done
 
+# A WINDOW THAT IS NOT A WHOLE NUMBER OF DAYS. The restart case above uses an exact four-day
+# span, so a share computed from the bucket COUNT (100/4) and one computed from the SECONDS
+# (100*86400/345600) are the same 25% and the case can never tell them apart. Measured
+# 2026-09-15 after a plan upgrade at 00:27: a 4d7h window became five 20% buckets and the
+# 7.5-hour first bucket got a whole day's share - `today still 10.0%` where the clock says
+# +0.5%. Here: 4.5 days -> still five buckets (d1/5), but a full day is worth 22.2%, not 20%,
+# so with 2% used and four full days after today the balance is 100 - 4*22.2 - 2 = 9.1, not
+# the 18.0 the bucket count gave.
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"
+WREset=$((NOW + 388800))                           # 4.5 days
+render "$h" "$(payload 10 40 $((NOW + 7200)) "$WREset")"
+render "$h" "$(payload 10 2 $((NOW + 7260)) "$WREset")"
+has   "W11  a 4.5-day window still counts five buckets"          "d1/5" "$L2"
+has   "W12  but a full day's share follows the clock"            "today still 9.1%" "$L2"
+hasnt "W13  and the bucket-count share is gone"                  "today still 18.0%" "$L2"
+quiet "W14"
+
 # THE EDGE, IN BOTH DIRECTIONS. 15% is the line: at or below it the counter is treated as
 # having gone back to the start, above it the fall is the server correcting its own number.
 # Testing one side only would pass just as happily with no threshold at all.
