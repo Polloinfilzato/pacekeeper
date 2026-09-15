@@ -725,6 +725,25 @@ has   "W12  but a full day's share follows the clock"            "today still 9.
 hasnt "W13  and the bucket-count share is gone"                  "today still 18.0%" "$L2"
 quiet "W14"
 
+# THE GITHUB MARK IS BYTES. U+F09B is a private-use glyph: invisible in a diff, invisible in a
+# review, and lost by an editor that normalises what it cannot see - which is exactly how it
+# went missing on 2026-09-03 and stayed missing for twelve days. So the assertion is on the
+# three UTF-8 bytes, written in octal so that bash 3.2 can produce them, never on the look.
+GH=$(printf '\357\202\233')
+for host in github gitlab; do
+    h=$(new_home); repo="$h/repo"; mkdir -p "$repo"
+    git -C "$repo" init -q >/dev/null 2>&1
+    git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x >/dev/null 2>&1
+    git -C "$repo" remote add origin "https://$host.com/x/y.git"
+    render "$h" "{\"workspace\":{\"current_dir\":\"$repo\"},\"model\":{\"display_name\":\"Opus 5\"},\"transcript_path\":\"\",\"context_window\":{\"used_percentage\":12}}"
+    if [ "$host" = github ]; then
+        has   "G1  a github origin shows the mark, byte for byte"   "$GH" "$L1"
+    else
+        hasnt "G2  any other host shows no repo mark at all"        "$GH" "$L1"
+    fi
+    quiet "G3-$host"
+done
+
 # THE EDGE, IN BOTH DIRECTIONS. 15% is the line: at or below it the counter is treated as
 # having gone back to the start, above it the fall is the server correcting its own number.
 # Testing one side only would pass just as happily with no threshold at all.

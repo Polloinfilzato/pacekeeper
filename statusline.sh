@@ -467,11 +467,15 @@ if ! pk_off git && [ "$git_cached" = false ] && git -C "$cwd" rev-parse --git-di
         unpulled=" ${RED}↓$behind${RESET}"
     fi
 
-    # There used to be a branch here choosing a different icon for GitHub remotes. Both
-    # arms assigned the SAME codepoint (U+F09B), so it never distinguished anything -
-    # dead code that the README then described as a feature. Removed 2026-09-03 rather
-    # than guessing a second glyph nobody has seen rendered.
-    repo_icon=""
+    # THE GITHUB MARK: shown when `origin` points at github.com, absent for any other host.
+    # No second glyph for other hosts, because none has been seen rendered. The first cut
+    # had this branch with the SAME codepoint on both arms, so it distinguished nothing; the
+    # 2026-09-03 rewrite removed the dead branch meaning to keep the mark - and lost it, since
+    # U+F09B is invisible in a diff and the line read `repo_icon=""` for twelve days. Asked
+    # back on 2026-09-15 («lo rivoglio»). The test pins the BYTES of the glyph, not its look,
+    # which is the only way a private-use character can be guarded.
+    remote_url=$(git -C "$cwd" remote get-url origin 2>/dev/null)
+    case "$remote_url" in *github.com*) repo_icon="" ;; *) repo_icon="" ;; esac
     branch_icon=""
 
     git_info=" ${repo_icon} ${branch_icon} ${branch_color}${branch}${changes}${RESET}${unpushed}${unpulled}"
