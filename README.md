@@ -7,18 +7,23 @@ useless on its own — it does not tell you whether 42% on a Tuesday is comforta
 `——pacekeeper-->` answers the question you are actually asking:
 
 ```
-7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)
+7d d3/7 left 58% · resets in 4d 6h (today still 0.9%) (+4h 34m)
 ```
 
-Read it as: *you are on day 3 of a 7-day window, you have 58% left, and after today's share you
-can still spend 8.1% before you start eating into the days that come after.* When that number
-goes red, you are borrowing from tomorrow.
+Read it as: *you are on day 3 of a 7-day window, you have 58% left, and you can still spend 0.9%
+before the day is over without eating into the days that come after — and at the average pace
+your quota runs out 4 hours and 34 minutes before the window does, so you are a little ahead of
+yourself.* When the first bracket goes red you are borrowing from tomorrow; when the second turns
+amber you are burning faster than the window refills.
 
 ```
- pacekeeper   main*  ██████░░░░ 62%  cache ⬤  47m  ⛭ 2/3 · 4/9  [Opus 5] [high]
-  5h left 78% · resets in 1h 12m   │   7d g3/7 left 58% · resets in 4d 6h (today still 8.1%)   │   plan Max 5x · billed in 12d
-  bmad 7-4 ⏵ 47m (dev)
+ pacekeeper   main* ↑1 ██████░░░░ 62% [Opus 5] [high]
+  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9%) (+4h 34m)   │   plan Max 5x · billed in 12d
+  bmad 7-4 ⏵ 47m (dev-running)
 ```
+
+Every figure above was produced by `statusline.sh` itself from a made-up payload, not typed in:
+the three brackets are consistent with each other because the same arithmetic made them.
 
 ---
 
@@ -116,7 +121,7 @@ the four situations where a plain percentage quietly lies to you.
 
 ### 1. It reports your pace, not your total
 
-The daily balance (`today still 8.1%` / `today over by 3.2%`) divides what is left by the days
+The daily balance (`today still 0.9%` / `today over by 3.2%`) divides what is left by the days
 that are actually left, and compares it to what you have already spent. It answers *"have I been
 working too much or too little so far?"* — not *"how hard could I still push?"*
 
@@ -135,17 +140,22 @@ then shows `0% used` and lets you spend as if you had seven days, when you may h
 *These are observations, not documented behaviour.* Measured on one account on 2026-09-01 and
 2026-09-03, on Claude Code 2.1.259: once when a new model shipped, once at a billing renewal that
 coincided with a plan change. Anthropic documents none of this, the two causes were not separated,
-and it may not generalise. The code treats a drop of ten points or more as a restart, which is a
-guess about a cause from an effect — and a deliberately conservative one, since believing in a
-restart that did not happen shortens the window rather than lengthening it.
+and it may not generalise. The code treats a drop of ten points or more **that lands at 15% or
+below** as a restart, which is a guess about a cause from an effect — and a deliberately
+conservative one, since believing in a restart that did not happen shortens the window rather than
+lengthening it. The landing condition was added after a drop from 82% to 72% (2026-09-11) was read
+as a restart: a counter that has just gone back to zero cannot read 72% six minutes later, and
+without that check the window shrank from seven days to two on a figure that was never true. A
+drop that lands high is the server correcting its own number, and the nominal window holds.
 
 `——pacekeeper-->` notices the restart, remembers when it happened, and says so:
 
 ```
-7d g1/2 left 100% · resets in 1d 14h (today still 50.0%)
+7d d1/2 left 100% · resets in 1d 14h (today still 36.8%)
      ↑
      the denominator turns orange: your 100% has to last
-     2 days, not 7. Today's share is 50%, not 14%.
+     1 day and 14 hours, not 7 days. The full day after
+     today keeps its 63.2%; the 36.8% left is today's.
 ```
 
 The colour is the emphasis; the number is the information. Pipe the line into a file, or read it
@@ -247,7 +257,7 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 | Block | Looks like | When it appears |
 |---|---|---|
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
-| **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 8.1%)` | on a Claude.ai subscription |
+| **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 0.9%)` | on a Claude.ai subscription |
 | **7-day pace** | `(+1g 5h)`, in brackets on the 7-day block — or `7d pace +1g 5h` on its own when the line is too narrow | with the 7-day window |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
@@ -294,10 +304,13 @@ Three things about it are deliberate.
 100% in hand has fewer days to cover — the `/2` case above — and a hard 7 would spread the
 allowance over days it does not have and report room that is not there.
 
-*It does not replace `today still 8.1%`.* They are one fact in two units, and they can honestly
-disagree by up to a day, because the daily balance counts whole days while the pace counts the
-hours of today that are still in front of you. The percentage is the approximation; keep both,
-because the percentage is also the figure the spend guard enforces.
+*It does not replace `today still 0.9%`.* They are one fact in two units, and they can honestly
+disagree by up to a day, because the daily balance budgets the whole of the current day up front
+while the pace counts the hours of today that are still in front of you. (The share of one full
+day is taken from the window's real length in seconds, not from a rounded day count — a window of
+4 days and 7 hours gives each full day 23.2%, not the 20% that "five days" would suggest.) The
+percentage is the approximation; keep both, because the percentage is also the figure the spend
+guard enforces.
 
 *It sits in brackets on the end of the 7-day block, the same shape as the 5-hour one, whenever
 there is room for it.* The information is the same kind, so it should read the same way. But the
@@ -324,7 +337,7 @@ so the strict side is the fast one:
 Yellow is not a warning about a problem. It is the one colour that tells you the quota you are
 paying for is about to evaporate unused.
 
-**The daily balance** in brackets is the heart of the thing: `today still 8.1%` is what you can
+**The daily balance** in brackets is the heart of the thing: `today still 0.9%` is what you can
 still spend before you start borrowing, and `today over by 3.2%` in red is how much you have
 already borrowed. The "day" runs from one reset to the next — 08:00 to 08:00, whatever your
 account's hour is — not from midnight, because that is the boundary Anthropic actually enforces.
@@ -385,7 +398,7 @@ forever — with the state as a symbol when things are fine and as a word when t
 
 | | |
 |---|---|
-| `bmad 7-4 ⏵ 47m (dev)` | running, 47 minutes in, currently in the dev phase — green |
+| `bmad 7-4 ⏵ 47m (dev-running)` | running, 47 minutes in, currently in the dev phase — green |
 | `bmad 7-4 ⏸ PAUSED: budget (review)` | paused, and **why**, and **where** — orange |
 | `bmad 7-4 ⏵ 47m · stop after story` | a graceful stop is pending; it will finish this story first |
 | `bmad 7-4 ⏵ 47m · 2 deferred` | two review findings have been set aside |
@@ -411,7 +424,7 @@ The same line says when one of the two tools has a newer version published, and 
 | | |
 |---|---|
 | `⬆ bmad-loop (0.12.0)` | with no run in flight, this is the whole line |
-| `bmad 7-4 ⏵ 47m (dev) · ⬆ bmad-method (6.12.0)` | with a run, the notice joins it — never a fourth line |
+| `bmad 7-4 ⏵ 47m (dev-running) · ⬆ bmad-method (6.12.0)` | with a run, the notice joins it — never a fourth line |
 
 Everything current means no line. That is the point of it.
 
