@@ -193,6 +193,14 @@ PY
         "    printf '%s' \"\$(( \${#_s} + \${#_wide} ))\"" \
         "    printf '%s' \"\${#_s}\""
 
+    prove_one "a snap-back inside the hour is an upgrade again" statusline.sh \
+        "                [ \"\$_ps_back\" = \"\$tier_label -> \$_ps_prev\" ] && _ps_kind=\"bounce\"" \
+        "                :"
+
+    prove_one "one cache for every home under the same TMPDIR" statusline.sh \
+        "cache_dir=\"\${TMPDIR:-/tmp}/cc-statusline-cache-\$(id -u 2>/dev/null || echo 0)-\$(printf '%s' \"\$HOME\" | cksum | cut -d' ' -f1)\"" \
+        "cache_dir=\"\${TMPDIR:-/tmp}/cc-statusline-cache-\$(id -u 2>/dev/null || echo 0)\""
+
     prove_one "every locale but Italian falls back to English" statusline.sh \
         "    ja|ja_*|ja.*)       UI_LANG=ja ;;" \
         "    ja|ja_*|ja.*)       UI_LANG=en ;;"
@@ -238,6 +246,9 @@ new_home() {
 }
 
 conf() { printf '%s\n' "$2" > "$1/.claude/subscription.conf"; }
+# Where the script keeps its caches for a throwaway home: TMPDIR is "$h/tmp/" and the key
+# carries the user id AND a checksum of $HOME, which is what keeps two homes apart.
+cache_dir_of() { printf '%s/tmp/cc-statusline-cache-%s-%s' "$1" "$(id -u)" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
 
 # A status-line payload. $1/$2 are the two percentages, $3/$4 the two reset stamps,
 # $5 a transcript path. Empty $1 means: no rate_limits at all, i.e. an API key.
@@ -398,10 +409,44 @@ has   "P4  the downgrade is logged"          "downgrade Max 20x -> Max 5x" "$(pl
 has   "P4b the anniversary is kept"          "RENEWAL_DAY=$TODAY_DOM"      "$(plan_conf "$h")"
 has   "P4c and the log says so"              "anniversary kept"            "$(plan_log "$h")"
 
-# P5: two upgrades leave ONE note, not a pile.
+# P5: two upgrades leave ONE note, not a pile. The log is aged two hours first: an upgrade
+# right after a downgrade is a bounce (P11), and a bounce would not write a note at all.
+touch -t "$(date -v-2H '+%Y%m%d%H%M' 2>/dev/null || date -d '-2 hours' '+%Y%m%d%H%M')" "$h/.claude/plan-changes.log"
 set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"
 equals "P5  a second upgrade replaces the note" "1" "$(grep -c '^# pacekeeper: ' "$h/.claude/subscription.conf")"
 equals "P5b and still one RENEWAL_TIME line"   "1" "$(grep -c '^RENEWAL_TIME=' "$h/.claude/subscription.conf")"
+equals "P5c and it was a real upgrade, not a bounce" "2" "$(grep -c ' upgrade ' "$h/.claude/plan-changes.log")"
+
+# P11: A -> B -> A INSIDE AN HOUR IS A BOUNCE. Measured 2026-09-15 and -17 on a live machine:
+# 51 phantom changes in two days, every one an upgrade "back" to the real plan minutes after a
+# phantom downgrade, and each rewrote RENEWAL_DAY to that day. The snap-back is logged as a
+# bounce and moves nothing.
+h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=3\nRENEWAL_TIME=15:41\n')"
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"      # first sighting: 20x
+set_plan "$h" default_claude_max_5x;  render "$h" "$(payload 22.5 41.2)"      # phantom downgrade
+set_plan "$h" default_claude_max_20x; render "$h" "$(payload 22.5 41.2)"      # snap back
+quiet "P11"
+has    "P11  the snap-back is logged as a bounce"  "bounce Max 5x -> Max 20x" "$(plan_log "$h")"
+hasnt  "P11b and not as an upgrade"                " upgrade "                "$(plan_log "$h")"
+has    "P11c the anniversary is kept"              "RENEWAL_DAY=3"            "$(plan_conf "$h")"
+has    "P11d and the time too"                     "RENEWAL_TIME=15:41"       "$(plan_conf "$h")"
+
+# P12: TWO HOMES, ONE TMPDIR, TWO CACHES. This is how the phantom changes were born: a
+# throwaway home (a test, the installer's preview) drawn with the machine's TMPDIR wrote its
+# plan into the cache the real home was reading. The cache key carries the HOME now.
+# h1's profile is dated two minutes back on purpose: the real profile is older than the cache
+# the stranger writes, and that is what makes the stranger's cache win over it.
+h1=$(new_home); conf "$h1" "RENEWAL_DAY=3"
+printf '{\n  "organizationRateLimitTier": "default_claude_max_20x"\n}\n' > "$h1/.claude.json"
+touch -t "$(date -v-2M '+%Y%m%d%H%M' 2>/dev/null || date -d '-2 minutes' '+%Y%m%d%H%M')" "$h1/.claude.json"
+render "$h1" "$(payload 22.5 41.2)"                                            # h1 sees 20x
+h2=$(new_home); conf "$h2" "RENEWAL_DAY=3"; set_plan "$h2" default_claude_max_5x  # h2 says 5x, freshly
+printf '%s' "$(payload 22.5 41.2)" > "$h2/in.json"
+HOME="$h2" TMPDIR="$h1/tmp/" CC_STATUSLINE_LANG=en bash "$SL" < "$h2/in.json" >/dev/null 2>&1
+render "$h1" "$(payload 22.5 41.2)"                                            # h1 again
+equals "P12  a stranger in the same TMPDIR changes nothing" "" "$(plan_log "$h1")"
+has    "P12b h1 still knows its own plan"                   "Max 20x" "$(cat "$h1/.claude/plan-seen")"
+has    "P12c and h2 saw its own, not h1's"                  "Max 5x"  "$(cat "$h2/.claude/plan-seen")"
 
 # P6: a TIER= override is a statement, not an observation: nothing is compared.
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=3\nTIER=Max 5x\n')"
@@ -460,7 +505,7 @@ matches "T8  [8:5] is a real time, normalised to 08:05" "billed (in [0-9]+[dhm]|
 # reach the arithmetic, so the grammar check in the drawing code is tested from HERE - not
 # through the config file, which the single parser has already validated.
 plant_cache() {   # $1 home, $2 the raw cache line
-    local dir="$1/tmp/cc-statusline-cache-$(id -u)"
+    local dir="$(cache_dir_of "$1")"
     mkdir -p "$dir"
     printf '%s' "$2" > "$dir/renew"
     # The cache is only consulted when it is NOT older than the config file.
@@ -891,7 +936,7 @@ plant_run() {
     mkdir -p "$h/bin"
     printf '#!/bin/sh\nexit 0\n' > "$h/bin/bmad-loop"; chmod +x "$h/bin/bmad-loop"
     key=$(printf '%s' /tmp | cksum | cut -d' ' -f1)
-    cdir="$h/tmp//cc-statusline-cache-$(id -u 2>/dev/null || echo 0)"
+    cdir="$(cache_dir_of "$h")"
     mkdir -p "$cdir"
     { printf '%s\n' "$(( $(date +%s) + 300 ))"; printf '%s\n' "$2"; } > "$cdir/bmad-$key"
 }
@@ -1260,7 +1305,7 @@ equals "U15 a relative path yields no notice, and no hang" "2" "$NLINES"; quiet 
 # FOLLOWS a symlink, so a symlinked directory looks perfectly ordinary to it.
 h=$(new_home)
 mkdir -p "$h/attacker" "$h/tmp"
-ln -s "$h/attacker" "$h/tmp/cc-statusline-cache-$(id -u)"
+ln -s "$h/attacker" "$(cache_dir_of "$h")"
 plant_versions "$h" "0.11.1" "0.12.0" "6.12.0" "" 86400
 plant_fetcher "$h"
 render "$h" "$(payload 22.5 41.2)"

@@ -304,7 +304,13 @@ GIT_CACHE_TTL=6
 # which belongs to everybody. Two users on the same machine would fight over the same
 # caches (plan, renewal, git) and would see each other's data. On macOS TMPDIR is already
 # per user, but the suffix costs nothing and makes it true everywhere.
-cache_dir="${TMPDIR:-/tmp}/cc-statusline-cache-$(id -u 2>/dev/null || echo 0)"
+# AND THE HOME IN THE NAME TOO. The user id is not enough: one user, two HOMEs, one TMPDIR is
+# exactly what a test suite or the installer is - a throwaway $HOME whose .claude.json says
+# "Max 5x", drawn with the machine's real TMPDIR. The plan cache it wrote there was then read
+# by the real sessions as THEIR plan: 51 phantom changes logged in two days (2026-09-15 and
+# -17), and every "upgrade" back to the real plan rewrote RENEWAL_DAY to that day. The cache
+# belongs to a HOME, so the HOME is part of the key. `cksum` is POSIX and costs nothing.
+cache_dir="${TMPDIR:-/tmp}/cc-statusline-cache-$(id -u 2>/dev/null || echo 0)-$(printf '%s' "$HOME" | cksum | cut -d' ' -f1)"
 
 # 🔴 AND THE NAME BEING PREDICTABLE IS THE PROBLEM, not the collision it was written for.
 # Raised by an adversarial review on 2026-09-05. On a machine where TMPDIR is unset — the
@@ -1825,6 +1831,19 @@ if [ -n "$tier_label" ] && [ -f "$HOME/.claude.json" ] \
             _ps_kind="change"
             if [ "$_ps_from" -gt 0 ] && [ "$_ps_to" -gt 0 ]; then
                 if [ "$_ps_to" -gt "$_ps_from" ]; then _ps_kind="upgrade"; else _ps_kind="downgrade"; fi
+            fi
+            # A -> B -> A INSIDE AN HOUR IS ONE PLAN READ TWICE, NOT TWO CHANGES. The log is
+            # appended only on a change, so its age is the age of the last one; if that one
+            # went the other way and is younger than an hour, this "upgrade" is the reading
+            # snapping back. It is logged as a bounce and moves nothing: the anniversary was
+            # rewritten to the wrong day six times on 2026-09-17 by exactly this pattern,
+            # before the cache key above was repaired. A real upgrade is never preceded by a
+            # downgrade minutes earlier - a downgrade takes effect at the end of the cycle.
+            if [ "$_ps_kind" = upgrade ] && [ -f "$plan_log" ] \
+               && [ $(( now - $(pk_mtime "$plan_log") )) -lt 3600 ] 2>/dev/null; then
+                _ps_back=$(tail -n 1 "$plan_log" 2>/dev/null \
+                    | sed -n 's/^[^ ]* [^ ]* \(.*\) -> \(.*\) (last seen.*/\1 -> \2/p')
+                [ "$_ps_back" = "$tier_label -> $_ps_prev" ] && _ps_kind="bounce"
             fi
             _ps_day=$(pk_date "$now" '+%-d')
             _ps_hhmm=$(pk_date "$now" '+%H:%M')
