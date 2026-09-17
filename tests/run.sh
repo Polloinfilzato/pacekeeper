@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ——pacekeeper--> · the test suite
+# —pacekeeper—> · the test suite
 #
 # WHY THIS FILE EXISTS. Six adversarial review passes read this program and missed five
 # defects; every one of the five was found the moment somebody RAN it. Reading is not the

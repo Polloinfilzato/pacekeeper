@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ——pacekeeper--> installer
+# —pacekeeper—> installer
 #
 # Copies the status line into ~/.claude, wires it into settings.json, and asks four
 # short questions. Every question has a working default, so `--yes` is a complete answer.
@@ -80,7 +80,7 @@ for arg in "$@"; do
         --restore)   RESTORE=1 ;;
         -h|--help)
             cat <<EOF
-——pacekeeper--> installer $VERSION
+—pacekeeper—> installer $VERSION
 
   ./install.sh              install, asking four short questions
   ./install.sh --yes        install with the defaults, asking nothing
@@ -395,7 +395,7 @@ done
 # something that was actually tried, not whatever was pushed a minute ago.
 if [ ! -f "$SRC_DIR/statusline.sh" ]; then
     command -v curl >/dev/null 2>&1 || die "the files are not next to this script and curl is missing"
-    step "Fetching ——pacekeeper--> $PACEKEEPER_REF"
+    step "Fetching —pacekeeper—> $PACEKEEPER_REF"
     fetched=$(mktemp -d) || die "cannot create a temporary directory"
     trap 'rm -rf "$fetched"' EXIT INT TERM
     for f in $FILES; do

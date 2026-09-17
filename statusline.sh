@@ -1,5 +1,5 @@
 #!/bin/bash
-# ——pacekeeper--> · a status line for Claude Code
+# —pacekeeper—> · a status line for Claude Code
 # What can show up on it:
 #   - the model in use
 #   - directory : session name (when it has been renamed)

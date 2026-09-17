@@ -2,9 +2,12 @@
 
 **A status line for Claude Code that tells you whether you are ahead of or behind your pace.**
 
+🇬🇧 English · 🇮🇹 Italiano · 🇫🇷 Français · 🇩🇪 Deutsch · 🇪🇸 Español · 🇯🇵 日本語 · 🇨🇳 中文 — the labels
+follow your locale; every figure, glyph and colour is the same in all seven.
+
 Every status line shows you how much quota you have burned. `42% used` is a fact, and it is
 useless on its own — it does not tell you whether 42% on a Tuesday is comfortable or reckless.
-`——pacekeeper-->` answers the question you are actually asking:
+`—pacekeeper—>` answers the question you are actually asking:
 
 ```
 7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+4h 34m)
@@ -151,7 +154,7 @@ as a restart: a counter that has just gone back to zero cannot read 72% six minu
 without that check the window shrank from seven days to two on a figure that was never true. A
 drop that lands high is the server correcting its own number, and the nominal window holds.
 
-`——pacekeeper-->` notices the restart, remembers when it happened, and says so:
+`—pacekeeper—>` notices the restart, remembers when it happened, and says so:
 
 ```
 7d d1/2 left 100% · resets in 1d 14h (today still 36.8% of 63.2%)
@@ -174,7 +177,7 @@ open windows means ten processes writing the same shared file — and a window t
 for two days keeps rewriting its stale snapshot over the live one, with a fresh timestamp on it.
 
 The failure is silent and it errs the permissive way: the brake reads a low number and lets you
-through. `——pacekeeper-->` ranks snapshots by the fields an idle writer cannot fake — the five-hour
+through. `—pacekeeper—>` ranks snapshots by the fields an idle writer cannot fake — the five-hour
 deadline and the weekly one — and declines to write when it cannot show it is the fresher one. In
 practice that is what stops a window left open since yesterday from speaking for today.
 
@@ -193,7 +196,7 @@ older than five minutes rather than trusting the arbitration to have been right.
 
 The prompt cache TTL is not a constant: 5 minutes by default, 1 hour when Claude Code asks for
 it, back to 5 minutes if your account goes into overage. Every turn that writes to the cache
-declares which one it used, in `usage.cache_creation`. `——pacekeeper-->` reads that field, so the
+declares which one it used, in `usage.cache_creation`. `—pacekeeper—>` reads that field, so the
 countdown is right on your account rather than right on someone else's.
 
 It also counts from the **start** of the request, not the end — generation time is time already
@@ -482,7 +485,7 @@ Claude Code passes the usage numbers to the status line **and nowhere else**. An
 your machine that wants to know how much quota is left — a nightly agent, a spend guard, a script
 that decides whether to start one more job — has no way to find out.
 
-So `——pacekeeper-->` writes what it learns to disk, atomically:
+So `—pacekeeper—>` writes what it learns to disk, atomically:
 
 | File | What is in it |
 |---|---|
@@ -649,11 +652,11 @@ measured. They are long on purpose.
 
 ## About the name
 
-The wordmark is `——pacekeeper-->`: a shaft on the left, an arrowhead on the right, and the word
+The wordmark is `—pacekeeper—>`: a shaft on the left, an arrowhead on the right, and the word
 run straight through the middle. It is **skewered**.
 
 That is a small joke in Italian, and it is the author's: the GitHub handle `polloinfilzato` reads
-*pollo* + *infilzato* — a skewered chicken. `——` + `-->` is the same skewer, drawn in ASCII.
+*pollo* + *infilzato* — a skewered chicken. `—` + `—>` is the same skewer, drawn with two dashes and an arrowhead.
 
 The repository itself is plain `pacekeeper`, because a directory called `--pacekeeper` breaks the
 first command anyone runs on it:
