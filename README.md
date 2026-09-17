@@ -1,4 +1,4 @@
-# ——pacekeeper-->
+# —pacekeeper—>
 
 **A status line for Claude Code that tells you whether you are ahead of or behind your pace.**
 
