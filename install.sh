@@ -20,7 +20,7 @@
 #     message then gets printed over a failure.
 set -euo pipefail
 
-VERSION="1.3.4"
+VERSION="1.4.0"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
@@ -464,12 +464,17 @@ if [ "$ASSUME_YES" = 0 ]; then
 
     case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
         it|it_*|it.*|*_IT*) detected="Italian" ;;
+        fr|fr_*|fr.*)       detected="French" ;;
+        de|de_*|de.*)       detected="German" ;;
+        es|es_*|es.*)       detected="Spanish" ;;
+        ja|ja_*|ja.*)       detected="Japanese" ;;
+        zh|zh_*|zh.*)       detected="Chinese" ;;
         *)                  detected="English" ;;
     esac
     say ""
     say "${B}1. Language${N}"
     say "   Labels only — everything else is the same. Detected from your locale: ${B}$detected${N}."
-    UI_LANG=$(ask "   auto / en / it" "auto")
+    UI_LANG=$(ask "   auto / en / it / fr / de / es / ja / zh" "auto")
 
     say ""
     say "${B}2. Billing countdown${N}"

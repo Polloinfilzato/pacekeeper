@@ -7,18 +7,19 @@ useless on its own — it does not tell you whether 42% on a Tuesday is comforta
 `——pacekeeper-->` answers the question you are actually asking:
 
 ```
-7d d3/7 left 58% · resets in 4d 6h (today still 0.9%) (+4h 34m)
+7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+4h 34m)
 ```
 
-Read it as: *you are on day 3 of a 7-day window, you have 58% left, and you can still spend 0.9%
-before the day is over without eating into the days that come after — and at the average pace
+Read it as: *you are on day 3 of a 7-day window, you have 58% left, and out of a day worth 14.3%
+you can still spend 0.9% before it is over without eating into the days that come after — and at
+the average pace
 your quota runs out 4 hours and 34 minutes before the window does, so you are a little ahead of
 yourself.* When the first bracket goes red you are borrowing from tomorrow; when the second turns
 amber you are burning faster than the window refills.
 
 ```
  pacekeeper   main* ↑1 ██████░░░░ 62% [Opus 5] [high]
-  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9%) (+4h 34m)   │   plan Max 5x · billed in 12d
+  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+4h 34m)   │   plan Max 5x · billed in 12d
   bmad 7-4 ⏵ 47m (dev-running)
 ```
 
@@ -39,7 +40,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.3.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.0/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -93,7 +94,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.3.4/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.0/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -122,7 +123,9 @@ the four situations where a plain percentage quietly lies to you.
 ### 1. It reports your pace, not your total
 
 The daily balance (`today still 0.9%` / `today over by 3.2%`) divides what is left by the days
-that are actually left, and compares it to what you have already spent. It answers *"have I been
+that are actually left, and compares it to what you have already spent. The figure after `of` is
+the yardstick — what one full day is worth, `14.3%` in an ordinary week — so the same `0.9%` is
+never mistaken for a seventh on a window that has only four days to give. It answers *"have I been
 working too much or too little so far?"* — not *"how hard could I still push?"*
 
 **It is a heuristic, and it is worth being honest about what kind.** It applies one policy — spend
@@ -151,11 +154,12 @@ drop that lands high is the server correcting its own number, and the nominal wi
 `——pacekeeper-->` notices the restart, remembers when it happened, and says so:
 
 ```
-7d d1/2 left 100% · resets in 1d 14h (today still 36.8%)
-     ↑
-     the denominator turns orange: your 100% has to last
-     1 day and 14 hours, not 7 days. The full day after
-     today keeps its 63.2%; the 36.8% left is today's.
+7d d1/2 left 100% · resets in 1d 14h (today still 36.8% of 63.2%)
+     ↑                                                    ↑
+     the denominator turns orange: your 100%              and the yardstick says what a
+     has to last 1 day and 14 hours, not 7 days.          day is worth now: 63.2%, not the
+     The full day after today keeps its 63.2%;            14.3% of an ordinary week.
+     the 36.8% left is today's.
 ```
 
 The colour is the emphasis; the number is the information. Pipe the line into a file, or read it
@@ -257,7 +261,7 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 | Block | Looks like | When it appears |
 |---|---|---|
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
-| **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 0.9%)` | on a Claude.ai subscription |
+| **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%)` | on a Claude.ai subscription |
 | **7-day pace** | `(+1g 5h)`, in brackets on the 7-day block — or `7d pace +1g 5h` on its own when the line is too narrow | with the 7-day window |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
@@ -308,9 +312,10 @@ allowance over days it does not have and report room that is not there.
 disagree by up to a day, because the daily balance budgets the whole of the current day up front
 while the pace counts the hours of today that are still in front of you. (The share of one full
 day is taken from the window's real length in seconds, not from a rounded day count — a window of
-4 days and 7 hours gives each full day 23.2%, not the 20% that "five days" would suggest.) The
-percentage is the approximation; keep both, because the percentage is also the figure the spend
-guard enforces.
+4 days and 7 hours gives each full day 23.2%, not the 20% that "five days" would suggest — and
+since 1.4.0 that share is printed in the bracket, `of 23.2%`, instead of being left for you to
+work out.) The percentage is the approximation; keep both, because the percentage is also the
+figure the spend guard enforces.
 
 *The two brackets run on two different clocks, and it shows.* The pace `(+17h 15m)` is built from
 the time left to the reset, so it moves every minute whether you work or not. The daily balance
@@ -350,7 +355,12 @@ paying for is about to evaporate unused.
 
 **The daily balance** in brackets is the heart of the thing: `today still 0.9%` is what you can
 still spend before you start borrowing, and `today over by 3.2%` in red is how much you have
-already borrowed. The "day" runs from one reset to the next — 08:00 to 08:00, whatever your
+already borrowed. The `of 14.3%` after it is the share of one full day — the yardstick the balance
+is measured against — and it is printed every day, not only when the window is short, because a
+reader who sees `of 14.3%` all week is the one who notices `of 23.2%` the morning after a counter
+restart. On a terminal too narrow for the full block the yardstick is the first thing dropped
+(`today still 0.9%`, the pre-1.4.0 form): a block is never folded in half, and a bracket cut at
+the right edge is worse than a shorter one. The "day" runs from one reset to the next — 08:00 to 08:00, whatever your
 account's hour is — not from midnight, because that is the boundary Anthropic actually enforces.
 
 **Plan & billing.** The plan name is read from your account profile, not typed in by hand, so it
@@ -547,13 +557,21 @@ RENEWAL_DAY=3          # monthly renewal, the 3rd of each month
 RENEWAL_TIME=15:41     # local time of the charge — optional, but it makes "today" precise
 # RENEWAL=2027-03-14   # or a fixed date, with PERIOD=yearly if it recurs
 # TIER=Max 5x          # override the plan name; normally it is read from your account
-UI_LANG=auto           # it | en | auto (from your locale) — the language of the labels
+UI_LANG=auto           # en | it | fr | de | es | ja | zh | auto (from your locale) — the labels
 PUBLISH_STATE=no       # yes = write the quota numbers to disk for other tools (see the sensor section)
 # DISABLE=git,cache    # blocks to switch off: git, cache, plan, bmad, cost, auto
 ```
 
 Every key is optional: with no file at all the line still draws, it just cannot know your renewal
 date and assumes nothing about it.
+
+**Languages.** The labels — and only the labels; every figure, glyph and colour is the same — come
+in English, Italian, French, German, Spanish, Japanese and Chinese. `auto` reads the language tag
+of your locale (`fr_CA` and `fr_FR` are both French; anything unknown is English), and
+`CC_STATUSLINE_LANG=de` in the environment overrides the file for one session, which is the way to
+try another language without editing anything. The decimal separator follows the language (`7,8%`
+in the four European ones, `7.8%` elsewhere), and the day counter is a prefix or a suffix as the
+language wants it: `d4/7`, `g4/7`, `4日目/7`, `第4天/7`.
 
 ### Finding your renewal date and time
 
@@ -582,8 +600,8 @@ instead of switching over at the exact hour.
 ## Tests
 
 ```sh
-./tests/run.sh            # 263 cases, about a minute
-./tests/run.sh --prove    # put 24 repaired defects back, one at a time, and watch it go red
+./tests/run.sh            # 311 cases, about a minute
+./tests/run.sh --prove    # put 29 repaired defects back, one at a time, and watch it go red
 ```
 
 Every case runs against a throwaway `$HOME` and a throwaway `TMPDIR`. Nothing here ever touches
@@ -595,7 +613,9 @@ eleven (including a corrupt value planted directly in the cache, which is the on
 an unchecked time can still reach shell arithmetic), the percentage grammar in both directions,
 the theoretical cost, what does and does not land on disk under each answer to the install
 question, the mid-window restart with publishing both on and off, which line the bmad-loop run
-lands on and whether it is printed at all, and the installer itself — installed, re-installed over
+lands on and whether it is printed at all, the daily yardstick in a full week, in a restarted
+window and on a terminal too narrow to carry it, the labels in all seven languages and the locale
+that picks each one, and the installer itself — installed, re-installed over
 itself, uninstalled, and asked
 to go back to a specific one of three installs that all happened inside the same second.
 

@@ -177,6 +177,26 @@ PY
         "                if [ \"\$_ps_to\" -gt \"\$_ps_from\" ]; then _ps_kind=\"upgrade\"; else _ps_kind=\"downgrade\"; fi" \
         "                _ps_kind=\"upgrade\""
 
+    prove_one "the yardstick is a seventh whatever the window" statusline.sh \
+        "    shtxt = sprintf(\"%.1f\", share); sub(/\\./, dsep, shtxt);" \
+        "    shtxt = sprintf(\"%.1f\", 100 / 7); sub(/\\./, dsep, shtxt);"
+
+    prove_one "the yardstick is never dropped on a narrow terminal" statusline.sh \
+        "    week_block=\"\$week_block_noshare\"" \
+        "    :"
+
+    prove_one "the day counter is a prefix in every language" statusline.sh \
+        "        _didx=\$(printf \"\$T_DAY_IDX\" \"\$day_idx\")" \
+        "        _didx=\"\${T_DAY}\${day_idx}\""
+
+    prove_one "a wide glyph is one column again" statusline.sh \
+        "    printf '%s' \"\$(( \${#_s} + \${#_wide} ))\"" \
+        "    printf '%s' \"\${#_s}\""
+
+    prove_one "every locale but Italian falls back to English" statusline.sh \
+        "    ja|ja_*|ja.*)       UI_LANG=ja ;;" \
+        "    ja|ja_*|ja.*)       UI_LANG=en ;;"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -229,6 +249,25 @@ payload() {
         printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","context_window":{"used_percentage":12},"rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s},"seven_day":{"used_percentage":%s,"resets_at":%s}},"effort":{"level":"high"}}' \
             "${5:-}" "$1" "${3:-$((now + 7000))}" "$2" "${4:-$((now + 300000))}"
     fi
+}
+
+# Same as render(), in the language asked for. An empty language means "do not override":
+# the script is left to read the locale, which is how a real installation gets its labels.
+render_lang() {
+    local lang="$1" home="$2" json="$3"
+    printf '%s' "$json" > "$home/in.json"
+    if [ -n "$lang" ]; then
+        OUT=$(HOME="$home" TMPDIR="$home/tmp/" CC_STATUSLINE_LANG="$lang" COLUMNS="${COLUMNS:-}" \
+                bash "$SL" < "$home/in.json" 2>"$home/stderr.txt")
+    else
+        OUT=$(env -u CC_STATUSLINE_LANG HOME="$home" TMPDIR="$home/tmp/" COLUMNS="${COLUMNS:-}" \
+                bash "$SL" < "$home/in.json" 2>"$home/stderr.txt")
+    fi
+    OUT=$(printf '%s' "$OUT" | LC_ALL=C sed 's/\x1b\[[0-9;]*m//g')
+    L1=$(printf '%s' "$OUT" | sed -n '1p')
+    L2=$(printf '%s' "$OUT" | sed -n '2p')
+    NLINES=$(printf '%s\n' "$OUT" | grep -c '')
+    ERR=$(cat "$home/stderr.txt")
 }
 
 # Runs the status line and leaves the result in OUT / L1 / L2 / ERR.
@@ -724,6 +763,82 @@ has   "W11  a 4.5-day window still counts five buckets"          "d1/5" "$L2"
 has   "W12  but a full day's share follows the clock"            "today still 9.1%" "$L2"
 hasnt "W13  and the bucket-count share is gone"                  "today still 18.0%" "$L2"
 quiet "W14"
+
+# ================================================== 5c. the yardstick in the bracket
+section "The daily share printed next to the balance"
+
+# `today still 7.8%` reads the same whether a day is worth a seventh or a quarter of the
+# window, and on 2026-09-17 - day 4 of a 5-day window after a plan upgrade - the share had
+# to be worked out by hand. So the bracket now says what the balance is measured against.
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"
+render_at 200 "$h" "$(payload 10 40 $((NOW + 7200)) $((NOW + 345600)))"
+has   "S1  a full week measures the day against a seventh"      "today still 17.1% of 14.3%" "$L2"
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"
+WREset=$((NOW + 388800))                           # 4.5 days, as in W11-W13
+render_at 200 "$h" "$(payload 10 40 $((NOW + 7200)) "$WREset")"
+render_at 200 "$h" "$(payload 10 2 $((NOW + 7260)) "$WREset")"
+has   "S2  a restarted window measures it against the real day"  "today still 9.1% of 22.2%" "$L2"
+render_at 200 "$h" "$(payload 10 90 $((NOW + 7320)) "$WREset")"
+has   "S3  and the yardstick stays when the balance is negative" "today over by 78.9% of 22.2%" "$L2"
+quiet "S4"
+
+# THE SHARE IS THE FIRST THING TO GO ON A NARROW TERMINAL. With it the seven-day block is
+# about 66 columns, and a block that does not fit is cut at the edge, not wrapped: on a
+# 60-column terminal the bracket goes back to the 1.3.x form rather than lose its closing
+# half. An unknown width keeps the full form, like the pace bracket does.
+h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"
+render_at 60 "$h" "$(payload 22.5 41.2)"
+has   "S5  a 60-column terminal keeps the balance"               "today still" "$OUT"
+hasnt "S6  and drops the yardstick"                              " of 14.3%" "$OUT"
+render_at 120 "$h" "$(payload 22.5 41.2)"
+has   "S7  a 120-column terminal keeps the yardstick"            " of 14.3%" "$OUT"
+render "$h" "$(payload 22.5 41.2)"
+has   "S8  and so does an unknown width"                         " of 14.3%" "$OUT"
+
+# ================================================== 5d. the seven languages
+section "The labels in every language the script speaks"
+
+# One payload, seven renders. Each language is checked on the three things that differ from
+# English: the balance label, the day counter (a prefix in Europe, a suffix in Japanese and
+# Chinese) and the decimal separator.
+h=$(new_home); conf "$h" "PUBLISH_STATE=no"
+P=$(payload 10 40 $((NOW + 7200)) $((NOW + 345600)))
+for spec in \
+    "it|oggi ancora 17,1% su 14,3%|g4/7" \
+    "en|today still 17.1% of 14.3%|d4/7" \
+    "fr|auj. encore 17,1% sur 14,3%|j4/7" \
+    "de|heute noch 17,1% von 14,3%|T4/7" \
+    "es|hoy aún 17,1% de 14,3%|d4/7" \
+    "ja|今日あと 17.1% / 14.3%|4日目/7" \
+    "zh|今日尚余 17.1% / 14.3%|第4天/7"
+do
+    lang=${spec%%|*}; rest=${spec#*|}; label=${rest%%|*}; didx=${rest#*|}
+    COLUMNS=200 render_lang "$lang" "$h" "$P"
+    has   "L-$lang  balance and yardstick"   "($label)" "$L2"
+    has   "L-$lang  day counter"             " $didx " "$L2"
+    quiet "L-$lang"
+done
+
+# WIDE GLYPHS ARE TWO COLUMNS. A Japanese line has fewer characters than columns, and a
+# fold that counts characters lets it overrun the edge - where Claude Code cuts it. The
+# oracle here is Python's east-asian-width table, not the script's own count: the terminal
+# is asked for exactly as many columns as the line has CHARACTERS, and it has to fold.
+COLUMNS=200 render_lang ja "$h" "$P"
+ja_chars=${#L2}
+ja_cols=$(printf '%s' "$L2" | python3 -c 'import sys,unicodedata; s=sys.stdin.read(); print(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s))')
+[ "$ja_cols" -gt "$ja_chars" ] && ok || bad "L-ja-w1 the oracle sees wide glyphs" "columns > characters" "$ja_cols vs $ja_chars"
+COLUMNS=$ja_chars render_lang ja "$h" "$P"
+[ "$NLINES" -gt 2 ] && ok || bad "L-ja-w2 a width equal to the character count folds" "more than 2 lines" "$NLINES"
+
+# The locale alone, with no override, picks the language; anything unknown is English.
+for spec in "fr_FR.UTF-8|auj. encore" "de_DE.UTF-8|heute noch" "es_ES.UTF-8|hoy aún" \
+            "ja_JP.UTF-8|今日あと" "zh_CN.UTF-8|今日尚余" "it_IT.UTF-8|oggi ancora" \
+            "pt_BR.UTF-8|today still" "C|today still"
+do
+    loc=${spec%%|*}; label=${spec#*|}
+    COLUMNS=200 LANG="$loc" LC_ALL="$loc" LC_MESSAGES="$loc" render_lang "" "$h" "$P"
+    has "L-locale $loc" "$label" "$L2"
+done
 
 # THE GITHUB MARK IS BYTES. U+F09B is a private-use glyph: invisible in a diff, invisible in a
 # review, and lost by an editor that normalises what it cannot see - which is exactly how it

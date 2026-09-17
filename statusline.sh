@@ -342,7 +342,7 @@ fi
 # One file, read once, with a `sed` over a handful of lines: cheaper than a read per key
 # scattered through the script. Every key is optional - with no file at all the script
 # behaves exactly as it did before, which is the requirement for handing it to anyone.
-#   UI_LANG=it|en|auto   language of the labels (auto = from the locale)
+#   UI_LANG=it|en|fr|de|es|ja|zh|auto   language of the labels (auto = from the locale)
 #   PUBLISH_STATE=yes|no write the quota numbers to file for other tools
 #   DISABLE=a,b,c        blocks to switch off: git,cache,plan,bmad,cost,auto
 # OFF unless the config says exactly `yes`. It used to default to "yes", with only the
@@ -366,18 +366,29 @@ fi
 pk_off() { case ",${PK_DISABLE}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 # --- Language ---
-# Italian when the locale says so, English in every other case (including a missing or
-# unknown locale): the script has to be handed to anyone without them touching it first.
-# CC_STATUSLINE_LANG=it|en overrides, to try the other language without changing the env.
+# The locale picks the labels; anything unknown, missing or English falls back to English:
+# the script has to be handed to anyone without them touching it first. Only the language
+# tag is read (fr_CA and fr_FR are both French); CC_STATUSLINE_LANG=it|en|fr|de|es|ja|zh
+# overrides, to try another language without changing the env.
+# T_DAY_IDX is a printf format because the day counter is a prefix in the European languages
+# (`d4/7`) and a suffix in Japanese and Chinese (`4日目/7`, `第4天/7`).
 case "${CC_STATUSLINE_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
-    it|it_*|it.*|*_IT*) LANG_IT=1 ;;
-    *)                  LANG_IT=0 ;;
+    it|it_*|it.*|*_IT*) UI_LANG=it ;;
+    fr|fr_*|fr.*)       UI_LANG=fr ;;
+    de|de_*|de.*)       UI_LANG=de ;;
+    es|es_*|es.*)       UI_LANG=es ;;
+    ja|ja_*|ja.*)       UI_LANG=ja ;;
+    zh|zh_*|zh.*)       UI_LANG=zh ;;
+    *)                  UI_LANG=en ;;
 esac
-if [ "$LANG_IT" = 1 ]; then
+# Kept for anything downstream that still asks the old yes/no question.
+[ "$UI_LANG" = it ] && LANG_IT=1 || LANG_IT=0
+case "$UI_LANG" in
+it)
     T_LEFT="resta";        T_RESETS="si azzera tra";  T_STILL="oggi ancora"
     T_OVER="oggi oltre di"; T_SUB="abbonamento";      T_BILL="addebito"
     T_TODAY="oggi";        T_TOMORROW="domani";       T_IN="tra"
-    T_DAY="g"
+    T_DAY="g";             T_DAY_IDX="g%s";           T_OF="su"
     T_PACE="passo"
     T_DECSEP=","
     T_PAUSED="IN PAUSA";   T_STOPPED="FERMATA";   T_CRASH="CRASH"
@@ -385,11 +396,77 @@ if [ "$LANG_IT" = 1 ]; then
     T_DEFERRED="rinviati";  T_GRACEFUL="stop a fine storia"
     T_CACHE="cache"
     T_AUTO_PRESENT="presente"; T_AUTO_ABSENT="assente"
-else
+    ;;
+fr)
+    T_LEFT="reste";        T_RESETS="reset dans";     T_STILL="auj. encore"
+    T_OVER="auj. dépassé de"; T_SUB="forfait";        T_BILL="prélèvement"
+    T_TODAY="aujourd'hui"; T_TOMORROW="demain";       T_IN="dans"
+    T_DAY="j";             T_DAY_IDX="j%s";           T_OF="sur"
+    T_PACE="rythme"
+    T_DECSEP=","
+    T_PAUSED="EN PAUSE";   T_STOPPED="ARRÊTÉE";   T_CRASH="CRASH"
+    T_INTERRUPTED="INTERROMPUE"; T_UNKNOWN="ÉTAT INCONNU"
+    T_DEFERRED="reportés";  T_GRACEFUL="arrêt en fin de story"
+    T_CACHE="cache"
+    T_AUTO_PRESENT="présent"; T_AUTO_ABSENT="absent"
+    ;;
+de)
+    T_LEFT="übrig";        T_RESETS="Reset in";       T_STILL="heute noch"
+    T_OVER="heute drüber um"; T_SUB="Abo";            T_BILL="Abbuchung"
+    T_TODAY="heute";       T_TOMORROW="morgen";       T_IN="in"
+    T_DAY="T";             T_DAY_IDX="T%s";           T_OF="von"
+    T_PACE="Tempo"
+    T_DECSEP=","
+    T_PAUSED="PAUSIERT";   T_STOPPED="GESTOPPT";  T_CRASH="ABSTURZ"
+    T_INTERRUPTED="UNTERBROCHEN"; T_UNKNOWN="STATUS UNBEKANNT"
+    T_DEFERRED="verschoben"; T_GRACEFUL="Stopp nach der Story"
+    T_CACHE="Cache"
+    T_AUTO_PRESENT="anwesend"; T_AUTO_ABSENT="abwesend"
+    ;;
+es)
+    T_LEFT="queda";        T_RESETS="se reinicia en"; T_STILL="hoy aún"
+    T_OVER="hoy excedido en"; T_SUB="plan";           T_BILL="cobro"
+    T_TODAY="hoy";         T_TOMORROW="mañana";       T_IN="en"
+    T_DAY="d";             T_DAY_IDX="d%s";           T_OF="de"
+    T_PACE="ritmo"
+    T_DECSEP=","
+    T_PAUSED="EN PAUSA";   T_STOPPED="DETENIDA";  T_CRASH="CRASH"
+    T_INTERRUPTED="INTERRUMPIDA"; T_UNKNOWN="ESTADO DESCONOCIDO"
+    T_DEFERRED="aplazados"; T_GRACEFUL="parar al final de la story"
+    T_CACHE="caché"
+    T_AUTO_PRESENT="presente"; T_AUTO_ABSENT="ausente"
+    ;;
+ja)
+    T_LEFT="残り";         T_RESETS="リセットまで";   T_STILL="今日あと"
+    T_OVER="今日超過";     T_SUB="プラン";            T_BILL="請求"
+    T_TODAY="今日";        T_TOMORROW="明日";         T_IN="あと"
+    T_DAY="日";            T_DAY_IDX="%s日目";        T_OF="/"
+    T_PACE="ペース"
+    T_DECSEP="."
+    T_PAUSED="一時停止";   T_STOPPED="停止";      T_CRASH="クラッシュ"
+    T_INTERRUPTED="中断";  T_UNKNOWN="状態不明"
+    T_DEFERRED="件保留";   T_GRACEFUL="ストーリー終了後に停止"
+    T_CACHE="キャッシュ"
+    T_AUTO_PRESENT="在席"; T_AUTO_ABSENT="離席"
+    ;;
+zh)
+    T_LEFT="剩余";         T_RESETS="距重置";         T_STILL="今日尚余"
+    T_OVER="今日超出";     T_SUB="套餐";              T_BILL="扣费"
+    T_TODAY="今天";        T_TOMORROW="明天";         T_IN="还有"
+    T_DAY="天";            T_DAY_IDX="第%s天";        T_OF="/"
+    T_PACE="节奏"
+    T_DECSEP="."
+    T_PAUSED="已暂停";     T_STOPPED="已停止";    T_CRASH="崩溃"
+    T_INTERRUPTED="已中断"; T_UNKNOWN="状态未知"
+    T_DEFERRED="项推迟";   T_GRACEFUL="故事结束后停止"
+    T_CACHE="缓存"
+    T_AUTO_PRESENT="在场"; T_AUTO_ABSENT="离开"
+    ;;
+*)
     T_LEFT="left";         T_RESETS="resets in";      T_STILL="today still"
     T_OVER="today over by"; T_SUB="plan";             T_BILL="billed"
     T_TODAY="today";       T_TOMORROW="tomorrow";     T_IN="in"
-    T_DAY="d"
+    T_DAY="d";             T_DAY_IDX="d%s";           T_OF="of"
     T_PACE="pace"
     T_DECSEP="."
     T_PAUSED="PAUSED";     T_STOPPED="STOPPED";   T_CRASH="CRASH"
@@ -397,7 +474,8 @@ else
     T_DEFERRED="deferred";  T_GRACEFUL="stop after story"
     T_CACHE="cache"
     T_AUTO_PRESENT="present";  T_AUTO_ABSENT="away"
-fi
+    ;;
+esac
 # Key = the working path made safe for a filename. CAREFUL: in bash ${var: -N} on a
 # string shorter than N returns the EMPTY string (zsh returns the whole thing instead):
 # using that form, every short path ended up in the same cache file, and different
@@ -1062,11 +1140,11 @@ if [ -n "$week_pct" ]; then
     # Balance = allowed - consumed:
     #     positive -> percentage still available today
     #     negative -> how much has already been borrowed (repaid by the days that follow)
-    IFS=' ' read -r week_left week_col day_idx balance over week_days <<EOF
+    IFS=' ' read -r week_left week_col day_idx balance over week_days week_share <<EOF
 $(LC_ALL=C awk -v p="$week_pct" -v s="$week_rem" -v span="$week_span" -v dsep="$T_DECSEP" 'BEGIN{
     v = 100 - p; if (v < 0) v = 0;
     col = (v <= 10 ? "R" : (v <= 25 ? "O" : "G"));
-    if (s < 0) { printf "%.0f %s 0 0 0 7", v, col; exit }
+    if (s < 0) { printf "%.0f %s 0 0 0 7 0", v, col; exit }
     g = span / 86400;
     G = int(g); if (g > G) G++;           # giorni che il 100% deve coprire, per eccesso
     if (G < 1) G = 1; if (G > 7) G = 7;
@@ -1093,7 +1171,11 @@ $(LC_ALL=C awk -v p="$week_pct" -v s="$week_rem" -v span="$week_span" -v dsep="$
     share = 100 * 86400 / span;
     bal = (100 - share * after) - p;
     txt = sprintf("%.1f", (bal < 0 ? -bal : bal)); sub(/\./, dsep, txt);
-    printf "%.0f %s %d %s %d %d", v, col, idx, txt, (bal < 0 ? 1 : 0), G
+    # The share of one full day travels out too, so the bracket can say what the balance is
+    # measured against: 14.3% in a full week, 23.2% after a restart that left 4d7h. Without
+    # it the same `today still 7.8%` reads as a seventh whether the window is 7 days or 4.
+    shtxt = sprintf("%.1f", share); sub(/\./, dsep, shtxt);
+    printf "%.0f %s %d %s %d %d %s", v, col, idx, txt, (bal < 0 ? 1 : 0), G, shtxt
 }')
 EOF
     wc_=$(pick_color "$week_col")
@@ -1223,10 +1305,12 @@ EOF
         # And the colour is the EMPHASIS, never the information: someone who cannot tell the
         # colours apart, or who pipes the line into a file, still reads "/2" and knows
         # everything they need to know.
+        # shellcheck disable=SC2059  # T_DAY_IDX is a format on purpose: prefix or suffix per language
+        _didx=$(printf "$T_DAY_IDX" "$day_idx")
         if [ "${week_days:-7}" -lt 7 ] 2>/dev/null; then
-            week_block="${week_block} ${CYAN}${T_DAY}${day_idx}${ORANGE}/${week_days}${GRAY}"
+            week_block="${week_block} ${CYAN}${_didx}${ORANGE}/${week_days}${GRAY}"
         else
-            week_block="${week_block} ${CYAN}${T_DAY}${day_idx}/7${GRAY}"
+            week_block="${week_block} ${CYAN}${_didx}/7${GRAY}"
         fi
     fi
     week_block="${week_block} ${wc_}${T_LEFT} ${week_left}%${GRAY}"
@@ -1240,10 +1324,20 @@ EOF
         # read as two independent measurements. The colour of each half is its own, because
         # they can honestly disagree - the percentage judges today against today's share,
         # the time judges the whole remaining window.
+        # "7.8% of 23.2%": the second figure is the share of one full day, the yardstick the
+        # first one is measured against. It is printed ALWAYS, not only when the window is
+        # short: a reader who sees `of 14.3%` every week is the one who notices `of 23.2%`
+        # the day the counter restarts. Asked for on 2026-09-17, when a 5-day window read
+        # exactly like a 7-day one and the daily share had to be worked out by hand.
+        # The block without the yardstick is kept aside: the share costs nine columns, and on
+        # a terminal too narrow for the full block the assembly below falls back to this one
+        # rather than let the bracket be cut off at the right edge.
         if [ "$over" = "1" ]; then
-            week_block="${week_block} ${RED}(${T_OVER} ${balance}%)${GRAY}"
+            week_block_noshare="${week_block} ${RED}(${T_OVER} ${balance}%)${GRAY}"
+            week_block="${week_block} ${RED}(${T_OVER} ${balance}% ${T_OF} ${week_share}%)${GRAY}"
         else
-            week_block="${week_block} ${GIT_GREEN}(${T_STILL} ${balance}%)${GRAY}"
+            week_block_noshare="${week_block} ${GIT_GREEN}(${T_STILL} ${balance}%)${GRAY}"
+            week_block="${week_block} ${GIT_GREEN}(${T_STILL} ${balance}% ${T_OF} ${week_share}%)${GRAY}"
         fi
     fi
 fi
@@ -1858,13 +1952,30 @@ pk_cols() {
 # accented labels count as the one column they occupy.
 pk_visible() {
     local _s=${1//$'\033'\[*([0-9;])m/}
-    printf '%s' "${#_s}"
+    # Kana and CJK ideographs take TWO columns each and `${#}` counts them as one, so a
+    # Japanese or Chinese line measured by characters alone overruns the edge by one column
+    # per glyph - and past the edge Claude Code cuts, it does not wrap. Each wide glyph is
+    # counted twice. Under a C locale bash 5 counts bytes instead, three per glyph: an
+    # overestimate, which folds early and never truncates.
+    local _wide=${_s//[^぀-ゟ゠-ヿ一-鿿]/}
+    printf '%s' "$(( ${#_s} + ${#_wide} ))"
 }
 
 sep="${GRAY}   │   "
 _sep_w=7          # "   │   " on screen
 _indent="  "
 _cols=$(pk_cols)
+
+# --- THE DAILY SHARE IS THE FIRST THING TO GO WHEN THE TERMINAL IS NARROW ---
+# `(today still 7.8% of 23.2%)` makes the seven-day block about 66 columns on its own, and a
+# block is never folded in half: past the right edge it is cut, not wrapped. So on a terminal
+# narrower than the full block the yardstick is dropped and the bracket goes back to
+# `(today still 7.8%)`, which is what it printed before 1.4.0. Same rule as the pace below:
+# an unknown width means room, and the full form stays.
+if [ -n "${week_block_noshare:-}" ] && [ "$_cols" -gt 0 ] 2>/dev/null \
+   && [ "$(pk_visible "${_indent}${week_block}")" -gt "$_cols" ] 2>/dev/null; then
+    week_block="$week_block_noshare"
+fi
 
 # --- THE SEVEN-DAY PACE GOES IN BRACKETS, LIKE THE FIVE-HOUR ONE, WHENEVER IT FITS ---
 # Ema, 2026-09-05: «l'informazione e' concettualmente analoga, quindi anche graficamente deve
