@@ -6,7 +6,8 @@ by tabs disappears, and everything after it slides one place to the left):
 
     status \x1f story \x1f phase \x1f elapsed_s \x1f reason \x1f graceful \x1f deferred
 
-or the word NONE when there is nothing worth showing.
+or the word NONE when there is nothing worth showing. `status` may also be `manual`: a
+paused run somebody has taken in hand (see manual_takeover).
 
 WATCH OUT for bmad-loop's TWO state vocabularies, which do not agree
 (documents.py:352 for list, :277 for status):
@@ -26,6 +27,7 @@ plus the ones that died badly in the last 24 hours.
 
 import datetime
 import json
+import os
 import subprocess
 import sys
 
@@ -85,6 +87,73 @@ def pick_run(runs, now):
         and (age_seconds(r.get("started_at"), now) or float("inf")) < 86400
     ]
     return recent_bad[-1] if recent_bad else None
+
+
+# The words manual_takeover adds around the card's own text, in the languages the status line
+# speaks. The status line passes its language in PK_UI_LANG; anything else is English.
+# "YOU" is in capitals on purpose: it is the one state that needs the reader, not a rescuer.
+MANUAL_WORDS = {
+    "it": {"hand": "in gestione", "stalled": "fermo da {m}m", "wait": "aspetta TE", "wait_for": "aspetta TE da {m}m"},
+    "en": {"hand": "in hand", "stalled": "stalled {m}m", "wait": "waiting for YOU", "wait_for": "waiting for YOU {m}m"},
+    "fr": {"hand": "en cours", "stalled": "bloqué depuis {m}m", "wait": "attend TOI", "wait_for": "attend TOI depuis {m}m"},
+    "de": {"hand": "in Arbeit", "stalled": "steht seit {m}m", "wait": "wartet auf DICH", "wait_for": "wartet seit {m}m auf DICH"},
+    "es": {"hand": "en curso", "stalled": "parado hace {m}m", "wait": "espera por TI", "wait_for": "espera por TI hace {m}m"},
+    "ja": {"hand": "対応中", "stalled": "停止 {m}分", "wait": "あなた待ち", "wait_for": "あなた待ち {m}分"},
+    "zh": {"hand": "处理中", "stalled": "停滞 {m} 分钟", "wait": "等你", "wait_for": "等你 {m} 分钟"},
+}
+
+
+def manual_takeover(run_id, project, now):
+    """The hand-over card: `.bmad-loop/supervisor/<run>/manual.json`, written by whoever takes a
+    PAUSED run in hand outside bmad-loop's own commands (the supervisor's hand-fix path, where
+    `resume` is a no-op on an in-run escalation and `resolve` would discard the branch).
+
+    Returns the text to show, or "" when there is no card. Shape of the card:
+        {"owner": "dm20-protocol-cd", "since": <epoch>, "updated": <epoch>,
+         "step": "3/8 patch applied", "done": false}
+    A card with "done": true is ignored (the run is being archived). A card not touched for
+    more than STALE_MIN minutes gets a «(fermo da Nm)» tail: a hand-fix that stalled must not
+    hide behind a reassuring label.
+
+    One exception, measured 2026-09-22 at 14:44: the card said «fermo da 55m» while the owner
+    was not stalled at all — it had a question open in front of Ema and could not move until he
+    answered. «Stalled» and «waiting for Ema» are opposite states (one needs a rescue, the other
+    needs HIM), and reading the first when it is the second sends someone to rescue a session
+    that is working correctly. So a card whose `waiting_for` is truthy (or whose step opens with
+    ASPETTO EMA / WAITING EMA) says «aspetta TE» with the minutes instead, and never «fermo».
+    """
+    STALE_MIN = 30
+    WAIT_MARKERS = ("aspetto ema", "waiting ema", "waiting for ema")
+    words = MANUAL_WORDS.get(os.environ.get("PK_UI_LANG", ""), MANUAL_WORDS["en"])
+    path = os.path.join(project, ".bmad-loop", "supervisor", run_id, "manual.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            card = json.load(fh)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(card, dict) or card.get("done"):
+        return ""
+    step = str(card.get("step") or "").strip() or words["hand"]
+    text = step
+    owner = str(card.get("owner") or "").strip()
+    if owner:
+        text = f"{step} · {owner}"
+    updated = card.get("updated") or card.get("since")
+    # `now` is the aware datetime main() works with, not an epoch. Subtracting a float from it
+    # raised TypeError, which the except below swallowed: idle was ALWAYS None, so "stalled"
+    # and "waiting for YOU Nm" could never print. Found by the first test that ran it.
+    now_s = now.timestamp() if hasattr(now, "timestamp") else float(now)
+    try:
+        idle = int(now_s - float(updated))
+    except (TypeError, ValueError):
+        idle = None
+    waiting = bool(card.get("waiting_for")) or step.lower().startswith(WAIT_MARKERS)
+    if idle is not None and idle > STALE_MIN * 60:
+        text = f"{text} ({words['wait_for'].format(m=idle // 60)})" if waiting \
+            else f"{text} ({words['stalled'].format(m=idle // 60)})"
+    elif waiting:
+        text = f"{text} ({words['wait']})"
+    return text
 
 
 def detail(run_id, project):
@@ -152,6 +221,14 @@ def main():
     deferred = 0
     if status in LIVE:
         story, phase, reason, graceful, deferred = detail(run.get("run_id") or "", project)
+    if status == "paused":
+        manual = manual_takeover(run.get("run_id") or "", project, now)
+        if manual:
+            # Somebody has declared the run THEIRS: the pause is not idle waiting any more.
+            # Ema, 2026-09-22: «a me nella status line mi continua a rimanere in pausa … non è
+            # vero che è in pausa ferma, comunque la si sta gestendo anche se a mano».
+            status = "manual"
+            reason = manual
     # With no story we fall back to the run's short ref: always present, so the
     # block never appears without saying WHO it is talking about.
     story = story or run.get("ref") or ""

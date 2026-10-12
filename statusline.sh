@@ -414,7 +414,7 @@ it)
     T_DAY="g";             T_DAY_IDX="g%s";           T_OF="su"
     T_PACE="passo"
     T_DECSEP=","
-    T_PAUSED="IN PAUSA";   T_STOPPED="FERMATA";   T_CRASH="CRASH"
+    T_PAUSED="IN PAUSA";   T_STOPPED="FERMATA";   T_CRASH="CRASH"; T_MANUAL="FIX MANUALE"
     T_INTERRUPTED="INTERROTTA"; T_UNKNOWN="STATO IGNOTO"
     T_DEFERRED="rinviati";  T_GRACEFUL="stop a fine storia"
     T_CACHE="cache"
@@ -427,7 +427,7 @@ fr)
     T_DAY="j";             T_DAY_IDX="j%s";           T_OF="sur"
     T_PACE="rythme"
     T_DECSEP=","
-    T_PAUSED="EN PAUSE";   T_STOPPED="ARRÊTÉE";   T_CRASH="CRASH"
+    T_PAUSED="EN PAUSE";   T_STOPPED="ARRÊTÉE";   T_CRASH="CRASH"; T_MANUAL="FIX MANUEL"
     T_INTERRUPTED="INTERROMPUE"; T_UNKNOWN="ÉTAT INCONNU"
     T_DEFERRED="reportés";  T_GRACEFUL="arrêt en fin de story"
     T_CACHE="cache"
@@ -440,7 +440,7 @@ de)
     T_DAY="T";             T_DAY_IDX="T%s";           T_OF="von"
     T_PACE="Tempo"
     T_DECSEP=","
-    T_PAUSED="PAUSIERT";   T_STOPPED="GESTOPPT";  T_CRASH="ABSTURZ"
+    T_PAUSED="PAUSIERT";   T_STOPPED="GESTOPPT";  T_CRASH="ABSTURZ"; T_MANUAL="MANUELLER FIX"
     T_INTERRUPTED="UNTERBROCHEN"; T_UNKNOWN="STATUS UNBEKANNT"
     T_DEFERRED="verschoben"; T_GRACEFUL="Stopp nach der Story"
     T_CACHE="Cache"
@@ -453,7 +453,7 @@ es)
     T_DAY="d";             T_DAY_IDX="d%s";           T_OF="de"
     T_PACE="ritmo"
     T_DECSEP=","
-    T_PAUSED="EN PAUSA";   T_STOPPED="DETENIDA";  T_CRASH="CRASH"
+    T_PAUSED="EN PAUSA";   T_STOPPED="DETENIDA";  T_CRASH="CRASH"; T_MANUAL="FIX MANUAL"
     T_INTERRUPTED="INTERRUMPIDA"; T_UNKNOWN="ESTADO DESCONOCIDO"
     T_DEFERRED="aplazados"; T_GRACEFUL="parar al final de la story"
     T_CACHE="caché"
@@ -466,7 +466,7 @@ ja)
     T_DAY="日";            T_DAY_IDX="%s日目";        T_OF="/"
     T_PACE="ペース"
     T_DECSEP="."
-    T_PAUSED="一時停止";   T_STOPPED="停止";      T_CRASH="クラッシュ"
+    T_PAUSED="一時停止";   T_STOPPED="停止";      T_CRASH="クラッシュ"; T_MANUAL="手動修正"
     T_INTERRUPTED="中断";  T_UNKNOWN="状態不明"
     T_DEFERRED="件保留";   T_GRACEFUL="ストーリー終了後に停止"
     T_CACHE="キャッシュ"
@@ -479,7 +479,7 @@ zh)
     T_DAY="天";            T_DAY_IDX="第%s天";        T_OF="/"
     T_PACE="节奏"
     T_DECSEP="."
-    T_PAUSED="已暂停";     T_STOPPED="已停止";    T_CRASH="崩溃"
+    T_PAUSED="已暂停";     T_STOPPED="已停止";    T_CRASH="崩溃"; T_MANUAL="手动修复"
     T_INTERRUPTED="已中断"; T_UNKNOWN="状态未知"
     T_DEFERRED="项推迟";   T_GRACEFUL="故事结束后停止"
     T_CACHE="缓存"
@@ -492,7 +492,7 @@ zh)
     T_DAY="d";             T_DAY_IDX="d%s";           T_OF="of"
     T_PACE="pace"
     T_DECSEP="."
-    T_PAUSED="PAUSED";     T_STOPPED="STOPPED";   T_CRASH="CRASH"
+    T_PAUSED="PAUSED";     T_STOPPED="STOPPED";   T_CRASH="CRASH"; T_MANUAL="MANUAL FIX"
     T_INTERRUPTED="INTERRUPTED"; T_UNKNOWN="UNKNOWN STATE"
     T_DEFERRED="deferred";  T_GRACEFUL="stop after story"
     T_CACHE="cache"
@@ -1431,7 +1431,7 @@ if ! pk_off bmad && command -v bmad-loop >/dev/null 2>&1 && [ -f "$HOME/.claude/
         fi
     fi
     if [ -z "$_bm_fresh" ]; then
-        _bm_payload=$(python3 "$HOME/.claude/statusline-bmad.py" "$cwd" 2>/dev/null)
+        _bm_payload=$(PK_UI_LANG="$UI_LANG" python3 "$HOME/.claude/statusline-bmad.py" "$cwd" 2>/dev/null)
         # FAIL (or nothing at all) = the probe could not read, NOT "no run": a run that is
         # alive must not vanish for a cached minute because bmad-loop was slow once
         # (measured 2026-09-13 under load 8). Keep the last good reading, if any.
@@ -1465,6 +1465,14 @@ if ! pk_off bmad && command -v bmad-loop >/dev/null 2>&1 && [ -f "$HOME/.claude/
                 _bm_body="${ORANGE}⏸ ${T_PAUSED}${GRAY}"
                 [ -n "$_bm_reason" ] && _bm_body="${_bm_body}: ${_bm_reason}"
                 [ -n "$_bm_phase" ] && _bm_body="${_bm_body} (${_bm_phase})"
+                ;;
+            manual)
+                # A PAUSED run somebody has declared theirs (card `.bmad-loop/supervisor/<id>/
+                # manual.json`, read by statusline-bmad.py): the reason is the hand-over step,
+                # not the escalation text. Ema 2026-09-22: «non è vero che è in pausa ferma».
+                _bm_body="${BLUE}⚒ ${T_MANUAL}${GRAY}"
+                [ -n "$_bm_reason" ] && _bm_body="${_bm_body}: ${_bm_reason}"
+                [ -n "$_bm_elapsed" ] && _bm_body="${_bm_body} · $(fmt_hm "$_bm_elapsed")"
                 ;;
             crashed)     _bm_body="${RED}✖ ${T_CRASH}${GRAY}" ;;
             interrupted) _bm_body="${RED}✖ ${T_INTERRUPTED}${GRAY}" ;;

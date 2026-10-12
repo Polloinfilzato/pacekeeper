@@ -217,6 +217,14 @@ PY
         "        case \"\$_pk_l\" in \"\"|C|C.*|POSIX) continue ;; esac" \
         "        case \"\$_pk_l\" in \"\") continue ;; esac"
 
+    prove_one "the hand-over card cannot tell its age" statusline-bmad.py \
+        "    now_s = now.timestamp() if hasattr(now, \"timestamp\") else float(now)" \
+        "    now_s = now"
+
+    prove_one "a run taken in hand reads as paused again" statusline-bmad.py \
+        "            status = \"manual\"" \
+        "            pass"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -1067,6 +1075,46 @@ FAKE
     if [ -n "$AGE" ] && [ "$AGE" -gt 2400 ] 2>/dev/null && [ "$AGE" -lt 2700 ] 2>/dev/null; then ok
     else bad "B12 a naive started_at is local time, not UTC" "about 2520s for a 42-minute-old run" "${AGE:-<empty>}"; fi
 fi
+
+# A PAUSED RUN SOMEBODY HAS TAKEN IN HAND is not idle. The supervisor writes a card,
+# `.bmad-loop/supervisor/<run>/manual.json`, and the line says MANUAL FIX with the card's step
+# instead of the pause reason (Ema, 2026-09-22: «non è vero che è in pausa ferma»).
+h=$(new_home)
+plant_run "$h" "manual${US}7-4${US}${US}600${US}3/8 patch applied · dm20${US}0${US}0"
+_pk_path=$PATH; PATH="$h/bin:$PATH"
+render "$h" "$(payload 22.5 41.2)"
+PATH=$_pk_path
+has    "B13 a run taken in hand says so"                "MANUAL FIX: 3/8 patch applied · dm20" "$L3"
+hasnt  "B14 and not that it is paused"                  "PAUSED" "$L3"
+quiet  "B15"
+
+# The helper reads the card. A stale card says "stalled", a card waiting on the reader says
+# so instead - opposite states, one needs a rescue and the other needs YOU - and the words
+# follow the language the status line passes in PK_UI_LANG.
+hb=$(new_home); mkdir -p "$hb/bin" "$hb/proj/.bmad-loop/supervisor/r1"
+STARTED=$(py "import datetime;print((datetime.datetime.now()-datetime.timedelta(minutes=42)).strftime('%Y-%m-%dT%H:%M:%S'))")
+cat > "$hb/bin/bmad-loop" <<FAKE
+#!/bin/sh
+case "\$2" in
+  --json) case "\$1" in
+      list)   printf '{"schema_version":1,"runs":[{"ref":"ab12","run_id":"r1","run_type":"story","started_at":"$STARTED","status":"paused","paused_stage":"review"}]}' ;;
+      status) printf '{"tasks":[{"story_key":"7-4","phase":"review"}]}' ;;
+  esac ;;
+esac
+FAKE
+chmod +x "$hb/bin/bmad-loop"
+CARD="$hb/proj/.bmad-loop/supervisor/r1/manual.json"
+OLD=$(( $(date +%s) - 7200 ))
+helper() { PATH="$hb/bin:$PATH" PK_UI_LANG="$1" python3 "$REPO/statusline-bmad.py" "$hb/proj"; }
+printf '{"owner":"dm20","since":%s,"updated":%s,"step":"3/8 patch applied","done":false}' "$OLD" "$OLD" > "$CARD"
+has   "B16 the helper turns a carded pause into manual"   "manual${US}" "$(helper en)"
+has   "B17 a card untouched for two hours is stalled"     "3/8 patch applied · dm20 (stalled 120m)" "$(helper en)"
+has   "B18 in the language asked for"                     "(fermo da 120m)" "$(helper it)"
+printf '{"owner":"dm20","since":%s,"updated":%s,"step":"3/8","waiting_for":"Ema","done":false}' "$OLD" "$OLD" > "$CARD"
+has   "B19 a card waiting on the reader is not stalled"   "(waiting for YOU 120m)" "$(helper en)"
+has   "B20 nor in Italian"                                "(aspetta TE da 120m)" "$(helper it)"
+printf '{"owner":"dm20","since":%s,"step":"3/8","done":true}' "$OLD" > "$CARD"
+has   "B21 a card marked done leaves the run paused"      "paused${US}" "$(helper en)"
 
 # No run: the row must not be paid for. Two lines, exactly as before this change.
 h=$(new_home)

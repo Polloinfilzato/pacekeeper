@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.3/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.3/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -428,8 +428,21 @@ forever — with the state as a symbol when things are fine and as a word when t
 | `bmad 7-4 ⏵ 47m · 2 deferred` | two review findings have been set aside |
 | `bmad 7-4 ✖ CRASH` | died on an error — red, and stays visible for 24 hours |
 | `bmad 7-4 ✖ INTERRUPTED` | the state file says alive, but nothing is running it any more |
+| `bmad 7-4 ⚒ MANUAL FIX: 3/8 patch applied · dm20 · 47m` | paused, but somebody is fixing it by hand — blue |
 
 A run you stopped yourself stays silent: you already know.
+
+**A paused run that somebody has taken in hand is not idle.** Whoever picks it up — you, or a
+supervising session — drops a card at `.bmad-loop/supervisor/<run-id>/manual.json` in the project:
+
+```json
+{"owner": "dm20", "since": 1791800000, "updated": 1791803600, "step": "3/8 patch applied", "done": false}
+```
+
+The line then says `MANUAL FIX` with the card's `step` and `owner` instead of the pause reason.
+A card not touched for 30 minutes gets `(stalled 45m)`; a card with `"waiting_for"` set says
+`(waiting for YOU 45m)` instead — the opposite state: it needs you, not a rescue. `"done": true`
+retires the card and the run reads as paused again.
 
 **A run that is alive does not blink.** The line is drawn from a probe that asks `bmad-loop` what is
 running, and the answer is cached for half a minute. When the probe itself fails — the machine is
