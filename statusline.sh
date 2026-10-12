@@ -351,11 +351,13 @@ fi
 #   UI_LANG=it|en|fr|de|es|ja|zh|auto   language of the labels (auto = from the locale)
 #   PUBLISH_STATE=yes|no write the quota numbers to file for other tools
 #   DISABLE=a,b,c        blocks to switch off: git,cache,plan,bmad,cost,auto
+#   RESET_AT_RENEWAL=YYYY-MM-DD  the weekly counter is known to restart at that renewal
+#                        (a plan change does it); see "A RESTART ANNOUNCED IN ADVANCE"
 # OFF unless the config says exactly `yes`. It used to default to "yes", with only the
 # installer writing "no" - so anyone who copied this file by hand published their paths,
 # session ids and usage figures without being asked. The default has to be the safe one:
 # the installer is not the only way this file ends up on a machine.
-PK_PUBLISH="no"; PK_DISABLE=""
+PK_PUBLISH="no"; PK_DISABLE=""; PK_RESET_AT=""; PK_RENEW_TIME=""
 _pk_conf="$HOME/.claude/subscription.conf"
 if [ -f "$_pk_conf" ]; then
     while IFS='=' read -r _pk_k _pk_v; do
@@ -363,9 +365,11 @@ if [ -f "$_pk_conf" ]; then
             UI_LANG)       [ -z "${CC_STATUSLINE_LANG:-}" ] && [ "$_pk_v" != auto ] && CC_STATUSLINE_LANG=$_pk_v ;;
             PUBLISH_STATE) [ "$_pk_v" = yes ] && PK_PUBLISH=yes ;;
             DISABLE)       PK_DISABLE=$_pk_v ;;
+            RESET_AT_RENEWAL) PK_RESET_AT=$_pk_v ;;
+            RENEWAL_TIME)  PK_RENEW_TIME=$_pk_v ;;
         esac
     done <<EOF
-$(sed -nE 's/^[[:space:]]*(UI_LANG|PUBLISH_STATE|DISABLE)[[:space:]]*=[[:space:]]*([^#]*)$/\1=\2/p' "$_pk_conf" 2>/dev/null | sed 's/[[:space:]]*$//')
+$(sed -nE 's/^[[:space:]]*(UI_LANG|PUBLISH_STATE|DISABLE|RESET_AT_RENEWAL|RENEWAL_TIME)[[:space:]]*=[[:space:]]*([^#]*)$/\1=\2/p' "$_pk_conf" 2>/dev/null | sed 's/[[:space:]]*$//')
 EOF
 fi
 # True when the block being asked about has been switched off by the user.
@@ -378,7 +382,20 @@ pk_off() { case ",${PK_DISABLE}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; 
 # overrides, to try another language without changing the env.
 # T_DAY_IDX is a printf format because the day counter is a prefix in the European languages
 # (`d4/7`) and a suffix in Japanese and Chinese (`4日目/7`, `第4天/7`).
-case "${CC_STATUSLINE_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
+# "C" AND "POSIX" NAME NO LANGUAGE, so they are skipped rather than obeyed. A shell that
+# exports LC_ALL=C - a common guard for scripts that compare numbers, since an Italian
+# locale prints 0.4 as `0,40` - otherwise hid LANG=it_IT.UTF-8 behind it, and Claude Code
+# hands that environment to every status-line render. Measured 2026-10-12: one session
+# started with LC_ALL=C showed English while the two beside it, same machine and same LANG,
+# showed Italian. Only the variables that carry a language tag decide.
+_pk_loc=${CC_STATUSLINE_LANG:-}
+if [ -z "$_pk_loc" ]; then
+    for _pk_l in "${LC_ALL:-}" "${LC_MESSAGES:-}" "${LANG:-}"; do
+        case "$_pk_l" in ""|C|C.*|POSIX) continue ;; esac
+        _pk_loc=$_pk_l; break
+    done
+fi
+case "$_pk_loc" in
     it|it_*|it.*|*_IT*) UI_LANG=it ;;
     fr|fr_*|fr.*)       UI_LANG=fr ;;
     de|de_*|de.*)       UI_LANG=de ;;
@@ -1128,6 +1145,51 @@ if [ -n "$week_pct" ]; then
                 [ "$week_span" -lt 3600 ] && week_span=3600
                 [ "$week_span" -gt 604800 ] && week_span=604800
             fi
+        fi
+    fi
+
+    # --- A RESTART ANNOUNCED IN ADVANCE ---
+    # `RESET_AT_RENEWAL=2026-10-15` in subscription.conf says: at the renewal of that day the
+    # weekly counter goes back to zero while `seven_day_resets_at` stays where it is. A plan
+    # change does that - measured 2026-09-03 (Max 20x -> 5x at the billing instant, 66% -> 0%)
+    # and 2026-09-15 (5x -> 20x, restarted at 00:27), and reported by others for downgrades in
+    # October 2026. The detection above only sees the restart AFTER it has happened, so for the
+    # days before it the 100% in hand was spread over the full seven when it really has to last
+    # only until the renewal: `d3/7 ... of 14.3%` on a window that ends after 4d16h. That errs
+    # the STINGY way, which is why it went unnoticed - the cost is allowance thrown away at the
+    # reset, a third of it on 2026-09-03.
+    # So, with the line present and its instant inside the current window:
+    #   before the instant -> the window ENDS there: span = origin -> renewal, and the time
+    #                         left counts down to the renewal, not to the nominal reset;
+    #   after the instant  -> the window STARTS there, unless a later restart was already
+    #                         detected (the latest origin wins).
+    # WHY A DATE AND NOT A YES. A plain renewal on the same plan is not known to restart the
+    # counter - the only report found says it does not (claude-code issue 42853, April 2026) -
+    # so a standing "yes" would shorten every month, the PERMISSIVE way: the line would hand
+    # out the whole allowance before the renewal and leave nothing for the days after it. A
+    # date stops applying by itself once its window is gone.
+    # The time of day is RENEWAL_TIME, the billing instant; without it, midnight.
+    if [ "$has_wreset" = true ] && [ -n "$PK_RESET_AT" ]; then
+        _ra_t=$PK_RENEW_TIME
+        case "$_ra_t" in [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;; *) _ra_t="00:00" ;; esac
+        _ra_ep=""
+        case "$PK_RESET_AT" in
+            [0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9])
+                # BSD first (`-j -f`, and the seconds spelled out: left unset they are taken
+                # from the clock), GNU second.
+                _ra_ep=$(date -j -f '%Y-%m-%d %H:%M:%S' "$PK_RESET_AT $_ra_t:00" +%s 2>/dev/null \
+                         || date -d "$PK_RESET_AT $_ra_t:00" +%s 2>/dev/null) ;;
+        esac
+        _ra_origin=$(( week_reset - week_span ))
+        if [ -n "$_ra_ep" ] && [ "$_ra_ep" -gt "$_ra_origin" ] 2>/dev/null \
+           && [ "$_ra_ep" -lt "$week_reset" ]; then
+            if [ "$now" -lt "$_ra_ep" ]; then
+                week_span=$(( _ra_ep - _ra_origin ))
+                week_rem=$(( _ra_ep - now ))
+            else
+                week_span=$(( week_reset - _ra_ep ))
+            fi
+            [ "$week_span" -lt 3600 ] && week_span=3600
         fi
     fi
 

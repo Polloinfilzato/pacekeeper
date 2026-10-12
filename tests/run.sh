@@ -205,6 +205,18 @@ PY
         "    ja|ja_*|ja.*)       UI_LANG=ja ;;" \
         "    ja|ja_*|ja.*)       UI_LANG=en ;;"
 
+    prove_one "an announced restart is ignored" statusline.sh \
+        "    if [ \"\$has_wreset\" = true ] && [ -n \"\$PK_RESET_AT\" ]; then" \
+        "    if false; then"
+
+    prove_one "an announced restart is applied after it as well as before" statusline.sh \
+        "                week_span=\$(( week_reset - _ra_ep ))" \
+        "                :"
+
+    prove_one "LC_ALL=C hides the language in LANG again" statusline.sh \
+        "        case \"\$_pk_l\" in \"\"|C|C.*|POSIX) continue ;; esac" \
+        "        case \"\$_pk_l\" in \"\") continue ;; esac"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -840,6 +852,54 @@ has   "S7  a 120-column terminal keeps the yardstick"            " of 14.3%" "$O
 render "$h" "$(payload 22.5 41.2)"
 has   "S8  and so does an unknown width"                         " of 14.3%" "$OUT"
 
+# ================================================== 5c-bis. a restart announced in advance
+section "A restart announced in advance: RESET_AT_RENEWAL"
+
+# A plan change restarts the weekly counter at the billing instant while the weekly deadline
+# stays put (2026-09-03, 2026-09-15). Detection sees it only afterwards, so the days BEFORE
+# it were measured against seven days when the 100% only had to last until the renewal.
+# The instant is given to the minute, so the span is a few seconds short of a whole number of
+# days: the assertions below are chosen so that cannot move them.
+at() { py "import datetime;t=datetime.datetime.now()+datetime.timedelta(seconds=$1);print(t.strftime('$2'))"; }
+NOW=$(date +%s)
+# Before: deadline in 4.5 days (nominal origin 2.5 days ago), renewal in 2.5 days.
+# The window becomes the 5 days origin -> renewal: day 3 of 5, a day worth 20% of it.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at 216000 %H:%M)
+RESET_AT_RENEWAL=$(at 216000 %Y-%m-%d)"
+render_at 200 "$h" "$(payload 10 30 $((NOW + 7200)) $((NOW + 388800)))"
+has   "R1  before the renewal the window ends there"          "d3/5" "$L2"
+has   "R2  and a full day is a fifth of it"                   " of 20.0%" "$L2"
+has   "R3  the countdown runs to the renewal"                 "resets in 2d 11h" "$L2"
+hasnt "R4  not to the nominal deadline"                       "resets in 4d" "$L2"
+grep -q '^week_days=5$' "$h/.claude/quota-state" && ok \
+    || bad "R5  the spend guard is handed the short window too" "week_days=5" "$(cat "$h/.claude/quota-state" 2>/dev/null)"
+quiet "R6"
+
+# After: renewal a day ago, deadline in 3.5 days. The counter restarted at the renewal, so
+# the window is the 4.5 days renewal -> deadline, a day of which has gone: day 2 of 5 rather
+# than day 4 of 7.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R7  after the renewal the window starts there"         "d2/5" "$L2"
+has   "R8  and a full day is worth 4.5 days of it"            " of 22.2%" "$L2"
+quiet "R9"
+
+# A date outside the current window, a malformed one, and no line at all: seven days.
+for spec in "R10|$(at 864000 %Y-%m-%d)|outside the window" "R11|2026-1-5|malformed" "R12||absent"; do
+    id=${spec%%|*}; rest=${spec#*|}; d=${rest%%|*}; why=${rest#*|}
+    h=$(new_home)
+    conf "$h" "PUBLISH_STATE=yes
+RESET_AT_RENEWAL=$d"
+    render_at 200 "$h" "$(payload 10 30 $((NOW + 7200)) $((NOW + 388800)))"
+    has   "$id  a date $why changes nothing"                  "d3/7" "$L2"
+    quiet "$id"
+done
+
 # ================================================== 5d. the seven languages
 section "The labels in every language the script speaks"
 
@@ -883,6 +943,13 @@ do
     loc=${spec%%|*}; label=${spec#*|}
     COLUMNS=200 LANG="$loc" LC_ALL="$loc" LC_MESSAGES="$loc" render_lang "" "$h" "$P"
     has "L-locale $loc" "$label" "$L2"
+done
+
+# LC_ALL=C NAMES NO LANGUAGE. A shell exporting it as a numeric-safety guard used to hide an
+# Italian LANG behind it, and the whole line went English (measured 2026-10-12).
+for v in C POSIX C.UTF-8; do
+    COLUMNS=200 LANG="it_IT.UTF-8" LC_ALL="$v" LC_MESSAGES="" render_lang "" "$h" "$P"
+    has "L-locale LC_ALL=$v leaves LANG to decide" "oggi ancora" "$L2"
 done
 
 # THE GITHUB MARK IS BYTES. U+F09B is a private-use glyph: invisible in a diff, invisible in a

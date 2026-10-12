@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.2/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.2/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -563,6 +563,7 @@ RENEWAL_TIME=15:41     # local time of the charge — optional, but it makes "to
 UI_LANG=auto           # en | it | fr | de | es | ja | zh | auto (from your locale) — the labels
 PUBLISH_STATE=no       # yes = write the quota numbers to disk for other tools (see the sensor section)
 # DISABLE=git,cache    # blocks to switch off: git, cache, plan, bmad, cost, auto
+# RESET_AT_RENEWAL=2027-03-14  # the weekly counter restarts at THAT renewal (a plan change)
 ```
 
 Every key is optional: with no file at all the line still draws, it just cannot know your renewal
@@ -572,7 +573,8 @@ date and assumes nothing about it.
 in English, Italian, French, German, Spanish, Japanese and Chinese. `auto` reads the language tag
 of your locale (`fr_CA` and `fr_FR` are both French; anything unknown is English), and
 `CC_STATUSLINE_LANG=de` in the environment overrides the file for one session, which is the way to
-try another language without editing anything. The decimal separator follows the language (`7,8%`
+try another language without editing anything. `LC_ALL=C` and `POSIX` name no language, so a shell
+that exports them as a numeric-safety guard does not turn the line English: `LANG` decides. The decimal separator follows the language (`7,8%`
 in the four European ones, `7.8%` elsewhere), and the day counter is a prefix or a suffix as the
 language wants it: `d4/7`, `g4/7`, `4日目/7`, `第4天/7`.
 
@@ -597,6 +599,29 @@ charge time. Then write RENEWAL_DAY and RENEWAL_TIME into
 
 Without `RENEWAL_TIME` everything still works; the countdown just says "today" for the whole day
 instead of switching over at the exact hour.
+
+### A plan change restarts the weekly counter
+
+Switching plan — up or down — sends the weekly counter back to zero at the billing instant, while
+the weekly reset stays on its usual day and time. After it has happened the line notices by itself
+(the counter drops, the window shortens, the day counter turns orange). What it cannot know is that
+it is **going** to happen: until then it spreads your allowance over the full seven days, when it
+only has to last until the renewal.
+
+So, when you have scheduled a plan change, write the date of that renewal:
+
+```ini
+RESET_AT_RENEWAL=2026-10-15
+```
+
+From then on the week ends at that renewal (the hour comes from `RENEWAL_TIME`): `d3/5` instead of
+`d3/7`, a day worth a fifth of the allowance instead of a seventh, and the countdown runs to the
+renewal. After it, the week starts there. The line names one date and stops applying once that
+week is over, so a forgotten one costs nothing the month after.
+
+Why not simply assume every renewal restarts the counter: Anthropic does not say, and the one
+report found of a renewal on the **same** plan says the counter carried on. Assuming it would make
+the line hand out the whole allowance before the renewal and leave nothing for the days after it.
 
 ---
 
