@@ -97,7 +97,7 @@ pk_auto_label() {
                 case "$line" in *"(governato"*|*"(Governato"*) gov=1 ;; esac
                 break ;;
         esac
-    done < "$hit/QUEUE.md"
+    done 2>/dev/null < "$hit/QUEUE.md"   # a queue gone or unreadable since the test above: silent
     case "$lv" in [Dd][Ii][Ss][Aa][Tt][Tt][Ii][Vv][Aa][Tt][Aa]) return 0 ;; esac
     [ -n "$lv" ] && [ -n "$gov" ] && lv="$lv gov"
     # Output: `presente` or `assente` (the key, not the translation), then the level if any.
@@ -179,6 +179,10 @@ if [ "${1:-}" = "--self-test-auto" ]; then
     _st_case "l6: INTENSITY senza parola in grassetto"      "presente"           sid-l6
     rm -f "$_st_pres"
     _st_case "l7: livello con PRESENZA mancante"            "assente max"        sid-l1
+    _st_mk 20260102-0700 sid-l8; chmod 000 "$_st_base/20260102-0700/QUEUE.md"
+    _st_errs=$(PACEKEEPER_AUTO_SESSIONS_DIR="$_st_base" PACEKEEPER_PRESENZA_FILE="$_st_pres" pk_auto_label sid-l8 2>&1 >/dev/null)
+    _st_case "l8: QUEUE.md illeggibile, stderr vuoto"       ""                   "" ; [ -z "$_st_errs" ] || { _st_ok=$(( _st_ok - 1 )); _st_ko=$(( _st_ko + 1 )); printf '\033[31m  KO   l8 stderr: %s\033[0m\n' "$_st_errs"; }
+    chmod 644 "$_st_base/20260102-0700/QUEUE.md"
     rm -rf "$_st_tmp"
     printf 'casi=%s passati=%s falliti=%s\n' "$_st_n" "$_st_ok" "$_st_ko"
     [ "$_st_ko" -eq 0 ] && exit 0 || exit 1
@@ -406,6 +410,22 @@ if [ -f "$_pk_conf" ]; then
 $(sed -nE 's/^[[:space:]]*(UI_LANG|PUBLISH_STATE|DISABLE|RESET_AT_RENEWAL|RENEWAL_TIME)[[:space:]]*=[[:space:]]*([^#]*)$/\1=\2/p' "$_pk_conf" 2>/dev/null | sed 's/[[:space:]]*$//')
 EOF
 fi
+# The instant RESET_AT_RENEWAL names, as epoch seconds; nothing when the line is absent or
+# malformed. The time of day is RENEWAL_TIME, the billing instant; without it, midnight.
+# Two readers: the restart detection and the window arithmetic (both explained where used).
+pk_reset_at_ep() {
+    local t=$PK_RENEW_TIME
+    [ -n "$PK_RESET_AT" ] || return 0
+    case "$t" in [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;; *) t="00:00" ;; esac
+    case "$PK_RESET_AT" in
+        [0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9])
+            # BSD first (`-j -f`, and the seconds spelled out: left unset they are taken
+            # from the clock), GNU second.
+            date -j -f '%Y-%m-%d %H:%M:%S' "$PK_RESET_AT $t:00" +%s 2>/dev/null \
+                || date -d "$PK_RESET_AT $t:00" +%s 2>/dev/null ;;
+    esac
+    return 0
+}
 # True when the block being asked about has been switched off by the user.
 pk_off() { case ",${PK_DISABLE}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
@@ -914,11 +934,13 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # render then reads a drop that never happened. That mistake SHORTENS the window and
         # tightens the daily share, which is the conservative direction - the same trade the
         # ten-point threshold already accepts.
-        _qo_prev=""
+        _qo_prev=""; _qo_pstamp=""
         if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ]; then
             _qo_prev=$_rl_o7p
+            _qo_pstamp=${_rl_old#*\"stamp\":}; _qo_pstamp=${_qo_pstamp%%,*}
         elif [ -n "$_qo_seen" ]; then
             _qo_prev=$_qo_seen
+            _qo_pstamp=${_qo_line#*\"stamp\":}; _qo_pstamp=${_qo_pstamp%%[,\}]*}
         fi
         if [ -z "$_qo_origin" ]; then
             _qo_origin=$(( week_reset - 604800 ))          # finestra nuova: origine nominale
@@ -950,7 +972,30 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # this trade favours the measured case over the conjectured one.
         elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null \
              && [ "$_wp_int" -le 15 ] 2>/dev/null; then
+            _qo_known=$_qo_origin                          # the origin this window already had
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
+            # THE RESTART HAPPENED BETWEEN THE LAST READING AND THIS ONE, not at this one.
+            # `now` is only when THIS machine first saw it. Measured 2026-10-15: the counter
+            # restarted at the 00:15 renewal (a plan change, announced with RESET_AT_RENEWAL),
+            # one Mac drew nothing between 19:17 the day before and 10:53, and at 10:53 it set
+            # the origin there - the announced instant was then skipped as "earlier than a
+            # restart already detected". Its line read d1/2 while the Mac that had been on at
+            # 00:15 read d2/3 for the same account. When the announced instant falls inside
+            # (last reading, now], that instant is the restart. With no announcement the
+            # origin stays `now`, which shortens the window: the conservative direction.
+            # NEVER EARLIER THAN AN ORIGIN ALREADY KNOWN. The previous reading can be a stale
+            # shared file (rate-limits.json left behind with publication off): it fakes a drop,
+            # and backdating to the announcement would then erase a LATER restart already on
+            # record - a longer window, a larger daily share, the permissive way (found by a
+            # Codex review, 2026-10-15). Moving the origin to `now` was already the behaviour
+            # there; the announcement may only replace `now` when it is later than what was known.
+            _qo_ra=$(pk_reset_at_ep)
+            if [ -n "$_qo_ra" ] && [ "$_qo_pstamp" -lt "$_qo_ra" ] 2>/dev/null \
+               && [ "$_qo_ra" -le "$_rl_now" ] 2>/dev/null \
+               && [ "$_qo_ra" -gt "$_qo_known" ] 2>/dev/null \
+               && [ "$_qo_ra" -gt $(( week_reset - 604800 )) ]; then
+                _qo_origin=$_qo_ra
+            fi
         fi
         # Per-process temporary name: two redraws landing together must not share one.
         { printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"%s","stamp":%s}\n' \
@@ -1204,16 +1249,7 @@ if [ -n "$week_pct" ]; then
     # date stops applying by itself once its window is gone.
     # The time of day is RENEWAL_TIME, the billing instant; without it, midnight.
     if [ "$has_wreset" = true ] && [ -n "$PK_RESET_AT" ]; then
-        _ra_t=$PK_RENEW_TIME
-        case "$_ra_t" in [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;; *) _ra_t="00:00" ;; esac
-        _ra_ep=""
-        case "$PK_RESET_AT" in
-            [0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9])
-                # BSD first (`-j -f`, and the seconds spelled out: left unset they are taken
-                # from the clock), GNU second.
-                _ra_ep=$(date -j -f '%Y-%m-%d %H:%M:%S' "$PK_RESET_AT $_ra_t:00" +%s 2>/dev/null \
-                         || date -d "$PK_RESET_AT $_ra_t:00" +%s 2>/dev/null) ;;
-        esac
+        _ra_ep=$(pk_reset_at_ep)
         _ra_origin=$(( week_reset - week_span ))
         if [ -n "$_ra_ep" ] && [ "$_ra_ep" -gt "$_ra_origin" ] 2>/dev/null \
            && [ "$_ra_ep" -lt "$week_reset" ]; then

@@ -897,6 +897,42 @@ has   "R7  after the renewal the window starts there"         "d2/5" "$L2"
 has   "R8  and a full day is worth 4.5 days of it"            " of 22.2%" "$L2"
 quiet "R9"
 
+# The same restart, seen LATE: this machine drew nothing between a reading before the renewal
+# (90%) and now (5%). Detection must date the restart at the announced instant, not at the
+# moment it first noticed it - measured 2026-10-15: d1/2 here, d2/3 on the machine that was on.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"90","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R13 a restart seen late is dated at the announced renewal" "d2/5" "$L2"
+quiet "R13"
+# Without the announcement the late sighting stays the origin: d1/4, the conservative side.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"90","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R14 with no announcement the restart is dated now"       "d1/4" "$L2"
+
+# A STALE shared file must not backdate past a restart already on record. Publication off, a
+# rate-limits.json from two days ago at 90% for the same deadline, a restart recorded 6 hours
+# ago at 5%, 5% now. Backdating to the renewal (a day ago) would read d2/5, a day too generous;
+# the recorded restart and the fallback to `now` both give d1/4.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=no
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"stamp":%s,"five_hour_used_pct":"10","seven_day_used_pct":"90","five_hour_resets_at":"%s","seven_day_resets_at":"%s","session_id":"old"}\n' \
+    $((NOW - 172800)) $((NOW - 160000)) $((NOW + 302400)) > "$h/.claude/rate-limits.json"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"5","stamp":%s}\n' \
+    $((NOW - 21600)) $((NOW + 302400)) $((NOW - 3600)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R15 a stale shared reading never backdates past a known restart" "d1/4" "$L2"
+quiet "R15"
+
 # A date outside the current window, a malformed one, and no line at all: seven days.
 for spec in "R10|$(at 864000 %Y-%m-%d)|outside the window" "R11|2026-1-5|malformed" "R12||absent"; do
     id=${spec%%|*}; rest=${spec#*|}; d=${rest%%|*}; why=${rest#*|}
@@ -1545,7 +1581,7 @@ HOME="$h" PATH="$shim:$PATH" sh "$INST" < /dev/null > "$h/log" 2>&1
 section "Autonomous mode: presence and the level it was set to"
 
 out=$(bash "$SL" --self-test-auto 2>&1)
-has   "A1  the auto self-test runs every case and fails none" "casi=22 passati=22 falliti=0" "$out"
+has   "A1  the auto self-test runs every case and fails none" "casi=23 passati=23 falliti=0" "$out"
 
 h=$(new_home)
 mkdir -p "$h/.claude/auto-sessions/20261015-1100" "$h/.claude/triade"
