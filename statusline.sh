@@ -877,6 +877,36 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     else
         _rl_fresh=yes                              # nessun aggregato: siamo i primi
     fi
+    # A READING WITH NO LIVE FIVE-HOUR WINDOW IS AN OLD ONE, and it writes no shared state
+    # (its own per-session file, above, is still written). The
+    # numbers in the payload are those of this session's LAST API response, and Claude Code
+    # drops the five-hour block when its deadline passes (documented: each window may be
+    # absent, and is removed at expiry). So a missing or past deadline means this session has
+    # had no response since that window closed: its weekly figure predates the current
+    # five-hour window and is older than anything a session active in it holds. It is not
+    # proof of a very old reading (an hour, or a minute, past the window), only of an OLDER
+    # one, which is all the shared file needs: it keeps the last good value and its age, and
+    # readers already stop on age (pacekeeper-quota, MAX_AGE). With no fresher competitor such
+    # a session used to win every comparison above. Measured 2026-10-15, twice: a session idle since before the 00:15 renewal (a plan
+    # change that restarted the counter) kept writing 77% on one machine and 74% on another,
+    # hours after the live counter read 8%. The shared file then held a number from the old
+    # window, and the restart detection judged the next live reading against it. Such a
+    # session still DRAWS its numbers - they are what it has - but writes none of them.
+    # THE ONE EXCEPTION IS A RESPONSE THAT JUST ARRIVED. A response a second before the window
+    # closes is drawn a second after, with the block already gone (Codex review 2026-10-15:
+    # 64.2% withheld while a 64.0% written 32 s earlier stayed published). Every response is
+    # appended to the transcript, so a transcript written in the last ten minutes says the
+    # reading is that recent; a session idle for hours has a transcript as old as its numbers.
+    # Residual, accepted: a local-only entry (a slash command, a `!` shell line) touches the
+    # transcript without a response, and lets an old reading through for those ten minutes.
+    if ! [ "$five_reset" -gt "$_rl_now" ] 2>/dev/null; then
+        _rl_recent=no
+        if [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ] && [ -f "$transcript_path" ]; then
+            _rl_tage=$(( _rl_now - $(pk_mtime "$transcript_path") ))
+            [ "$_rl_tage" -ge -60 ] 2>/dev/null && [ "$_rl_tage" -le 600 ] 2>/dev/null && _rl_recent=yes
+        fi
+        [ "$_rl_recent" = yes ] || { _rl_write=no; _rl_fresh=no; }
+    fi
     if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ] && [ "$_rl_locked" = yes ]; then
         { printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json.$$" \
             && mv -f "$HOME/.claude/rate-limits.json.$$" "$HOME/.claude/rate-limits.json"; } 2>/dev/null

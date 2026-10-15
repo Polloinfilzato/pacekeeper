@@ -998,6 +998,49 @@ printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"25","stamp":%s}\n' \
 render_at 200 "$h" "$(payload 10 20 $((NOW + 7200)) $((NOW + 302400)))"
 has   "R21 any drop across the instant confirms an announcement"   "d2/5" "$L2"
 
+# A session idle for over five hours keeps redrawing the numbers of its last call: no live
+# five-hour window. It draws them, and writes none of them (measured 2026-10-15: 77% and 74%
+# from sessions idle since before a restart, published over a live 8%).
+for spec in "W1|missing|" "W2|past|$((NOW - 600))"; do
+    id=${spec%%|*}; rest=${spec#*|}; why=${rest%%|*}; r5=${rest#*|}
+    h=$(new_home)
+    conf "$h" "PUBLISH_STATE=yes"
+    printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"9","stamp":%s}\n' \
+        $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 60)) > "$h/.claude/quota-origin"
+    before=$(cat "$h/.claude/quota-origin")
+    if [ -z "$r5" ]; then
+        P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"rate_limits":{"seven_day":{"used_percentage":77,"resets_at":%s}}}' $((NOW + 302400)))
+    else
+        P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%s},"seven_day":{"used_percentage":77,"resets_at":%s}}}' "$r5" $((NOW + 302400)))
+    fi
+    render_at 200 "$h" "$P"
+    has   "$id  a five-hour window $why: the weekly figure is still drawn" "23%" "$L2"
+    equals "$id  and quota-origin is not touched" "$before" "$(cat "$h/.claude/quota-origin")"
+    [ -e "$h/.claude/rate-limits.json" ] && bad "$id  and no rate-limits.json is written" "absent" "$(cat "$h/.claude/rate-limits.json")" || ok
+    [ -e "$h/.claude/quota-state" ] && bad "$id  and no quota-state is written" "absent" "$(cat "$h/.claude/quota-state")" || ok
+    quiet "$id"
+done
+
+# The exception: the same payload from a session whose transcript was written a minute ago (a
+# response that landed just before its five-hour window closed) is recent, and is published.
+# One written an hour ago is not.
+for spec in "W3|60|yes" "W4|3600|no"; do
+    id=${spec%%|*}; rest=${spec#*|}; age=${rest%%|*}; pub=${rest#*|}
+    h=$(new_home)
+    conf "$h" "PUBLISH_STATE=yes"
+    tr="$h/t.jsonl"; : > "$tr"
+    touch -t "$(at -"$age" %Y%m%d%H%M.%S)" "$tr"
+    P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","rate_limits":{"seven_day":{"used_percentage":64,"resets_at":%s}}}' "$tr" $((NOW + 302400)))
+    render_at 200 "$h" "$P"
+    if [ "$pub" = yes ]; then
+        grep -q '"seven_day_used_pct":"64"' "$h/.claude/rate-limits.json" 2>/dev/null && ok \
+            || bad "$id  a transcript written ${age}s ago: the reading is published" "64 in rate-limits.json" "$(cat "$h/.claude/rate-limits.json" 2>/dev/null)"
+    else
+        [ -e "$h/.claude/rate-limits.json" ] && bad "$id  a transcript written ${age}s ago: nothing published" "absent" "$(cat "$h/.claude/rate-limits.json")" || ok
+    fi
+    quiet "$id"
+done
+
 # A date outside the current window, a malformed one, and no line at all: seven days.
 for spec in "R10|$(at 864000 %Y-%m-%d)|outside the window" "R11|2026-1-5|malformed" "R12||absent"; do
     id=${spec%%|*}; rest=${spec#*|}; d=${rest%%|*}; why=${rest#*|}
