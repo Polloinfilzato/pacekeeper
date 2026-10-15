@@ -1541,6 +1541,24 @@ h=$(new_home)
 HOME="$h" PATH="$shim:$PATH" sh "$INST" < /dev/null > "$h/log" 2>&1
 [ "$?" -ne 0 ] && ok || bad "I9  no terminal and no --yes: refuses" "non-zero exit" "0"
 
+# ================================================================== autonomous mode
+section "Autonomous mode: presence and the level it was set to"
+
+out=$(bash "$SL" --self-test-auto 2>&1)
+has   "A1  the auto self-test runs every case and fails none" "casi=22 passati=22 falliti=0" "$out"
+
+h=$(new_home)
+mkdir -p "$h/.claude/auto-sessions/20261015-1100" "$h/.claude/triade"
+printf 'sid-auto\n' > "$h/.claude/auto-sessions/20261015-1100/MAIN_SESSION_ID"
+printf '# Queue\n\nINTENSITY: **staffetta** (until 08:00, then **max**)\n' > "$h/.claude/auto-sessions/20261015-1100/QUEUE.md"
+printf 'presente\n' > "$h/.claude/triade/PRESENZA"
+render "$h" '{"session_id":"sid-auto","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"}}'
+has   "A2  the bracket names presence and level" "[auto: present · staffetta]" "$L1"
+quiet "A2"
+printf 'INTENSITY: **DISATTIVATA** (stopped)\n' > "$h/.claude/auto-sessions/20261015-1100/QUEUE.md"
+render "$h" '{"session_id":"sid-auto","workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"}}'
+hasnt "A3  a deactivated session shows no bracket" "[auto" "$L1"
+
 # ================================================================== the count
 printf '\n'
 TOTAL=$((PASS + FAIL + SKIP))

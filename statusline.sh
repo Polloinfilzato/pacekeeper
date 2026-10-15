@@ -16,7 +16,7 @@
 #   - bmad-loop / BMAD Method updates, ONLY when one is available, with the new version
 #     in brackets. Never fetched on the drawing path: see the block's own comment.
 #   - session cost (API users only, above $0.01)
-#   - `auto·presente` / `auto·assente`, ONLY on the line of the session that is the main of a
+#   - `auto: presente · max` / `auto: assente · bassa`, ONLY on the line of the session that is the main of a
 #     live autonomous session (/auto). Details and the self-test in the block just below.
 
 # --- Autonomous mode: is THIS session the main of a live /auto session, and is Ema here? ---
@@ -64,7 +64,7 @@
 #
 # falsifier: write this session's id into a fresh <dir>/MAIN_SESSION_ID with a QUEUE.md and
 # the segment does not appear within 8 s; or `auto-init.sh` grows a closing marker with a name
-# not listed above and a closed session keeps showing `auto·…`.
+# not listed above and a closed session keeps showing `auto: …`.
 pk_auto_label() {
     local sid=$1
     local base="${PACEKEEPER_AUTO_SESSIONS_DIR:-$HOME/.claude/auto-sessions}"
@@ -85,12 +85,30 @@ pk_auto_label() {
     [ -e "$hit/ANNULLATA.md" ] && return 0
     [ -e "$hit/CLOSED" ] && return 0
     [ -e "$base/CLOSED-${hit##*/}" ] && return 0
+    # LEVEL. Read the way auto-pace.sh reads it (its line ~1004): the FIRST `INTENSITY:` line of
+    # QUEUE.md, the first **bolded** word on it. `DISATTIVATA` is what «interrompi modalità auto»
+    # writes there: the session is over, so it closes the question like STOP.md does. A level
+    # the governor wrote is marked `(governato` on the same line and gets a `gov` suffix.
+    local line lv="" gov=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            INTENSITY:*)
+                [[ "$line" =~ \*\*([A-Za-z]+)\*\* ]] && lv=${BASH_REMATCH[1]}
+                case "$line" in *"(governato"*|*"(Governato"*) gov=1 ;; esac
+                break ;;
+        esac
+    done < "$hit/QUEUE.md"
+    case "$lv" in [Dd][Ii][Ss][Aa][Tt][Tt][Ii][Vv][Aa][Tt][Aa]) return 0 ;; esac
+    [ -n "$lv" ] && [ -n "$gov" ] && lv="$lv gov"
+    # Output: `presente` or `assente` (the key, not the translation), then the level if any.
     p=""
     [ -r "$pres" ] && read -r p < "$pres" 2>/dev/null
     case "$p" in
-        presente) printf 'auto·%s' "${T_AUTO_PRESENT:-presente}" ;;
-        *)        printf 'auto·%s' "${T_AUTO_ABSENT:-assente}" ;;
+        presente) printf 'presente' ;;
+        *)        printf 'assente' ;;
     esac
+    [ -n "$lv" ] && printf ' %s' "$lv"
+    return 0
 }
 
 # `statusline.sh --self-test-auto`: the block above against a throwaway tree, never the real
@@ -118,15 +136,15 @@ if [ "${1:-}" = "--self-test-auto" ]; then
     mkdir -p "$_st_base"
     _st_mk 20260101-0100 sid-a
     printf 'presente\n' > "$_st_pres"
-    _st_case "a: id nella dir, PRESENZA=presente"            "auto·presente" sid-a
+    _st_case "a: id nella dir, PRESENZA=presente"            "presente"      sid-a
     rm -f "$_st_pres"
-    _st_case "b: stesso id, PRESENZA mancante"               "auto·assente"  sid-a
+    _st_case "b: stesso id, PRESENZA mancante"               "assente"       sid-a
     printf 'assente\n' > "$_st_pres"
-    _st_case "b2: PRESENZA=assente"                          "auto·assente"  sid-a
+    _st_case "b2: PRESENZA=assente"                          "assente"       sid-a
     printf '  presente  \n' > "$_st_pres"
-    _st_case "b3: PRESENZA=presente con spazi intorno"       "auto·presente" sid-a
+    _st_case "b3: PRESENZA=presente con spazi intorno"       "presente"      sid-a
     printf 'forse\n' > "$_st_pres"
-    _st_case "b4: PRESENZA=forse"                            "auto·assente"  sid-a
+    _st_case "b4: PRESENZA=forse"                            "assente"       sid-a
     printf 'presente\n' > "$_st_pres"
     _st_case "c: id assente da ogni dir"                     ""              sid-nope
     _st_case "c2: id vuoto"                                  ""              ""
@@ -143,8 +161,24 @@ if [ "${1:-}" = "--self-test-auto" ]; then
     _st_mk 20260101-0400 sid-f; _st_mk 20260101-0500 sid-f STOP.md
     _st_case "f: due dir, la più nuova chiusa -> vince lei"  ""              sid-f
     _st_mk 20260101-0600 sid-g STOP.md; _st_mk 20260101-0700 sid-g
-    _st_case "f2: due dir, la più nuova aperta -> vince lei" "auto·presente" sid-g
+    _st_case "f2: due dir, la più nuova aperta -> vince lei" "presente"      sid-g
     _st_case "h: cartella auto-sessions inesistente"         ""              sid-a "$_st_tmp/non-esiste"
+    # the level, from the first INTENSITY line of QUEUE.md
+    printf 'presente\n' > "$_st_pres"
+    _st_mk 20260102-0100 sid-l1; printf '# Coda\n\nINTENSITY: **max** (Ema «/auto max presente»)\n' > "$_st_base/20260102-0100/QUEUE.md"
+    _st_case "l1: INTENSITY **max** alla riga 3"            "presente max"       sid-l1
+    _st_mk 20260102-0200 sid-l2; printf 'INTENSITY: **staffetta** (fino alle 8, poi **max**)\nINTENSITY: **bassa**\n' > "$_st_base/20260102-0200/QUEUE.md"
+    _st_case "l2: due INTENSITY, vince la prima, prima parola" "presente staffetta" sid-l2
+    _st_mk 20260102-0300 sid-l3; printf 'INTENSITY: **alta** (governato; SCENDI da max)\n' > "$_st_base/20260102-0300/QUEUE.md"
+    _st_case "l3: livello scritto dal governatore"          "presente alta gov"  sid-l3
+    _st_mk 20260102-0400 sid-l4; printf 'INTENSITY: **DISATTIVATA** (Ema «interrompi»)\n' > "$_st_base/20260102-0400/QUEUE.md"
+    _st_case "l4: DISATTIVATA chiude la sessione"           ""                   sid-l4
+    _st_mk 20260102-0500 sid-l5; printf 'INTENSITY: **media**' > "$_st_base/20260102-0500/QUEUE.md"
+    _st_case "l5: riga senza a capo finale"                 "presente media"     sid-l5
+    _st_mk 20260102-0600 sid-l6; printf 'INTENSITY: alta, senza grassetto\n' > "$_st_base/20260102-0600/QUEUE.md"
+    _st_case "l6: INTENSITY senza parola in grassetto"      "presente"           sid-l6
+    rm -f "$_st_pres"
+    _st_case "l7: livello con PRESENZA mancante"            "assente max"        sid-l1
     rm -rf "$_st_tmp"
     printf 'casi=%s passati=%s falliti=%s\n' "$_st_n" "$_st_ok" "$_st_ko"
     [ "$_st_ko" -eq 0 ] && exit 0 || exit 1
@@ -2537,9 +2571,12 @@ if ! pk_off auto; then
         _au_sid=${transcript_path##*/}; _au_sid=${_au_sid%.jsonl}
     fi
     _au_label=$(pk_auto_label "$_au_sid")
+    # `presente max` -> [auto: presente · max]; the level in the default colour, as Ema set it.
+    _au_lv=""
+    case "$_au_label" in *" "*) _au_lv=" ${GRAY}·${RESET} ${_au_label#* }" ;; esac
     case "$_au_label" in
-        "auto·${T_AUTO_PRESENT}") auto_info=" ${GRAY}[${CYAN}auto${GRAY}·${GREEN}${T_AUTO_PRESENT}${GRAY}]${RESET}" ;;
-        "auto·${T_AUTO_ABSENT}")  auto_info=" ${GRAY}[${CYAN}auto${GRAY}·${ORANGE}${T_AUTO_ABSENT}${GRAY}]${RESET}" ;;
+        presente|"presente "*) auto_info=" ${GRAY}[${CYAN}auto${GRAY}: ${GREEN}${T_AUTO_PRESENT}${_au_lv}${GRAY}]${RESET}" ;;
+        assente|"assente "*)   auto_info=" ${GRAY}[${CYAN}auto${GRAY}: ${ORANGE}${T_AUTO_ABSENT}${_au_lv}${GRAY}]${RESET}" ;;
     esac
 fi
 

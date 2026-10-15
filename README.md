@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.4/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.4/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -221,7 +221,7 @@ never render at all.
 | **Plan register** | `⛭ 2/3 · 4/9` | when a long-running plan file exists |
 | **Model** | `[Opus 5]` | always |
 | **Effort** | `[high]` | when a reasoning effort level is set |
-| **Auto** | `[auto·presente]` / `[auto·assente]` | only in the session driving an unattended `/auto` run — see below |
+| **Auto** | `[auto: presente · max]` / `[auto: assente · bassa]` | only in the session driving an unattended `/auto` run — see below |
 | **Session cost** | `≈$0.42` | **API users only** — hidden on subscriptions, where it would be a fiction |
 
 **Git.** `*` means tracked changes, `+` means untracked files, `↑N` commits you have not pushed,
@@ -251,7 +251,11 @@ separately): the session that drives such a run says so, and whether the human d
 present or away — because a queue of guards behaves differently in the two cases, and the one
 question you ask when you sit back down is *«is this the session that is running the night?»*.
 It reads the markers that skill writes under `~/.claude/auto-sessions/`; with nothing there it
-never appears. `DISABLE=auto` switches it off.
+never appears. After the dot comes the level the run was set to (`max`, `alta`, `media`,
+`bassa`, `staffetta`, …), read from the first `INTENSITY:` line of the queue file the same way the
+skill's own governor reads it; `gov` after it means the governor, not the human, wrote that
+level. A session whose level reads `DISATTIVATA` has been stopped and shows nothing.
+`DISABLE=auto` switches it off.
 
 **Session cost.** A theoretical pay-per-use figure summed from the transcript at list API prices.
 It is deliberately **hidden for Claude.ai subscribers**, because for them it does not correspond to
