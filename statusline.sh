@@ -934,14 +934,25 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # render then reads a drop that never happened. That mistake SHORTENS the window and
         # tightens the daily share, which is the conservative direction - the same trade the
         # ten-point threshold already accepts.
-        _qo_prev=""; _qo_pstamp=""
-        if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ]; then
-            _qo_prev=$_rl_o7p
-            _qo_pstamp=${_rl_old#*\"stamp\":}; _qo_pstamp=${_qo_pstamp%%,*}
+        # AND THE NEWER OF THE TWO WINS. Both readings carry a `stamp`; with publication off the
+        # shared file can be days old (left from when it was on) while quota-origin was written
+        # a minute ago. Judging against the older one fakes a drop, and with an announcement in
+        # between it backdated a restart already rejected (Codex review, 2026-10-15). A stamp
+        # that is missing or not a number is unknown, never "old": with both unknown the shared
+        # file keeps its precedence, as before.
+        _qo_prev=""; _qo_pstamp=""; _qo_shst=""; _qo_ownst=""
+        case "$_rl_old" in *'"stamp":'*) _qo_shst=${_rl_old#*\"stamp\":}; _qo_shst=${_qo_shst%%[,\}]*} ;; esac
+        case "$_qo_shst" in ''|*[!0-9]*) _qo_shst="" ;; esac
+        case "$_qo_line" in *'"stamp":'*) _qo_ownst=${_qo_line#*\"stamp\":}; _qo_ownst=${_qo_ownst%%[,\}]*} ;; esac
+        case "$_qo_ownst" in ''|*[!0-9]*) _qo_ownst="" ;; esac
+        if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ] \
+           && { [ -z "$_qo_seen" ] || [ -z "$_qo_ownst" ] \
+                || { [ -n "$_qo_shst" ] && [ "$_qo_shst" -ge "$_qo_ownst" ]; }; }; then
+            _qo_prev=$_rl_o7p; _qo_pstamp=$_qo_shst
         elif [ -n "$_qo_seen" ]; then
-            _qo_prev=$_qo_seen
-            _qo_pstamp=${_qo_line#*\"stamp\":}; _qo_pstamp=${_qo_pstamp%%[,\}]*}
+            _qo_prev=$_qo_seen; _qo_pstamp=$_qo_ownst
         fi
+        _qo_base=${_qo_origin:-$(( week_reset - 604800 ))}   # the origin known before this reading
         if [ -z "$_qo_origin" ]; then
             _qo_origin=$(( week_reset - 604800 ))          # finestra nuova: origine nominale
         # A RESTART LEAVES THE COUNTER NEAR ZERO -- A DROP ALONE IS NOT ONE.
@@ -972,30 +983,51 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         # this trade favours the measured case over the conjectured one.
         elif [ -n "$_qo_prev" ] && [ $(( _qo_prev - _wp_int )) -ge 10 ] 2>/dev/null \
              && [ "$_wp_int" -le 15 ] 2>/dev/null; then
-            _qo_known=$_qo_origin                          # the origin this window already had
             _qo_origin=$_rl_now                            # ripartenza a meta' finestra
-            # THE RESTART HAPPENED BETWEEN THE LAST READING AND THIS ONE, not at this one.
-            # `now` is only when THIS machine first saw it. Measured 2026-10-15: the counter
-            # restarted at the 00:15 renewal (a plan change, announced with RESET_AT_RENEWAL),
-            # one Mac drew nothing between 19:17 the day before and 10:53, and at 10:53 it set
-            # the origin there - the announced instant was then skipped as "earlier than a
-            # restart already detected". Its line read d1/2 while the Mac that had been on at
-            # 00:15 read d2/3 for the same account. When the announced instant falls inside
-            # (last reading, now], that instant is the restart. With no announcement the
-            # origin stays `now`, which shortens the window: the conservative direction.
-            # NEVER EARLIER THAN AN ORIGIN ALREADY KNOWN. The previous reading can be a stale
-            # shared file (rate-limits.json left behind with publication off): it fakes a drop,
-            # and backdating to the announcement would then erase a LATER restart already on
-            # record - a longer window, a larger daily share, the permissive way (found by a
-            # Codex review, 2026-10-15). Moving the origin to `now` was already the behaviour
-            # there; the announcement may only replace `now` when it is later than what was known.
-            _qo_ra=$(pk_reset_at_ep)
-            if [ -n "$_qo_ra" ] && [ "$_qo_pstamp" -lt "$_qo_ra" ] 2>/dev/null \
-               && [ "$_qo_ra" -le "$_rl_now" ] 2>/dev/null \
-               && [ "$_qo_ra" -gt "$_qo_known" ] 2>/dev/null \
-               && [ "$_qo_ra" -gt $(( week_reset - 604800 )) ]; then
-                _qo_origin=$_qo_ra
-            fi
+        fi
+        # --- AN ANNOUNCED RESTART IS DATED AT ITS INSTANT, AND ONLY IF THE COUNTER CONFIRMS IT ---
+        # RESET_AT_RENEWAL is a forecast written by a person; the counter is the server. The
+        # forecast is judged ONCE, at the first reading after its instant (the previous reading
+        # is older than the instant, or its time is unknown, or there is none), and it is
+        # accepted only when the counter bears it out: it went DOWN across the instant - by
+        # ANY amount. WHY NOT THE DROP RULE'S TEN POINTS: one reading before and one after
+        # cannot tell a restart seen late (25% -> 0% -> 20% by the next reading, a 5-point
+        # drop) from a small server correction on an unchanged plan (42% -> 41%). Refusing the
+        # first misses a restart, and a missed restart is PERMISSIVE (the days before it keep
+        # budget the old counter already spent); accepting the second shortens a window that
+        # did not restart, which is STINGY. Both were raised by Codex on 2026-10-15; with an
+        # announcement on record the error is put on the stingy side, as everywhere here. With no
+        # previous reading to compare, or one of unknown time, the counter must sit at or under
+        # the 15% landing bar. NOT the landing bar when a drop is visible: a machine that sees
+        # the restart late sees a counter that has been climbing since (Codex review: 90% before,
+        # 20% at the first reading after - a real restart, refused forever by the bar alone).
+        # Two measured failures, both 2026-10-15, both on the same announcement:
+        #   - SEEN LATE. The counter restarted at the 00:15 renewal (a plan change); one Mac
+        #     drew nothing between 19:17 the day before and 10:53, set the origin at 10:53 and
+        #     read d1/2, while the Mac that had been on at 00:15 read d2/3. The restart happened
+        #     somewhere between the two readings, and the announcement says where.
+        #   - NOT HAPPENED. A second account on the same Mac carried the same line, its plan
+        #     had NOT changed, and its counter read 41% after the instant. Taken on trust the
+        #     line made its window start that morning: a daily share of 24% instead of 14.3%,
+        #     the permissive way. A counter at 41% says the restart did not happen.
+        # KNOWN LIMIT, unchanged: "the newer reading wins" means a stale shared file no longer
+        # rescues a restart whose first sample read above the landing bar (19%) and whose next
+        # one read lower (10%) - a counter falling after a restart, which only a correction
+        # does. That case is the drop rule's documented limit above; it was recovered before
+        # only by judging against a file days old, the same mistake that revived announcements.
+        # NEVER EARLIER THAN AN ORIGIN ALREADY KNOWN: a stale shared reading (rate-limits.json
+        # left behind with publication off) can fake a drop, and backdating past a restart
+        # already on record would lengthen the window (found by a Codex review, 2026-10-15).
+        # Once accepted, the instant is written into quota-origin like any detected restart,
+        # so every later render - and the spend guard - reads it from there.
+        _qo_ra=$(pk_reset_at_ep)
+        if [ -n "$_qo_ra" ] && [ "$_qo_ra" -le "$_rl_now" ] 2>/dev/null \
+           && [ "$_qo_ra" -gt "$_qo_base" ] 2>/dev/null \
+           && [ "$_qo_ra" -lt "$week_reset" ] 2>/dev/null \
+           && { [ -z "$_qo_pstamp" ] || [ "$_qo_pstamp" -lt "$_qo_ra" ] 2>/dev/null; } \
+           && { { [ -n "$_qo_prev" ] && [ "$_wp_int" -lt "$_qo_prev" ] 2>/dev/null; } \
+                || { { [ -z "$_qo_prev" ] || [ -z "$_qo_pstamp" ]; } && [ "$_wp_int" -le 15 ] 2>/dev/null; }; }; then
+            _qo_origin=$_qo_ra
         fi
         # Per-process temporary name: two redraws landing together must not share one.
         { printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"%s","stamp":%s}\n' \
@@ -1240,8 +1272,12 @@ if [ -n "$week_pct" ]; then
     # So, with the line present and its instant inside the current window:
     #   before the instant -> the window ENDS there: span = origin -> renewal, and the time
     #                         left counts down to the renewal, not to the nominal reset;
-    #   after the instant  -> the window STARTS there, unless a later restart was already
-    #                         detected (the latest origin wins).
+    #   after the instant  -> nothing here. Whether the restart HAPPENED is the counter's
+    #                         call, judged once by the detection above ("AN ANNOUNCED RESTART
+    #                         IS DATED AT ITS INSTANT"), which writes the instant into
+    #                         quota-origin when the counter confirms it. Applying the line on
+    #                         trust after the instant gave a 41% account a 24% daily share
+    #                         instead of 14.3% (2026-10-15): its plan had not changed.
     # WHY A DATE AND NOT A YES. A plain renewal on the same plan is not known to restart the
     # counter - the only report found says it does not (claude-code issue 42853, April 2026) -
     # so a standing "yes" would shorten every month, the PERMISSIVE way: the line would hand
@@ -1256,10 +1292,8 @@ if [ -n "$week_pct" ]; then
             if [ "$now" -lt "$_ra_ep" ]; then
                 week_span=$(( _ra_ep - _ra_origin ))
                 week_rem=$(( _ra_ep - now ))
-            else
-                week_span=$(( week_reset - _ra_ep ))
+                [ "$week_span" -lt 3600 ] && week_span=3600
             fi
-            [ "$week_span" -lt 3600 ] && week_span=3600
         fi
     fi
 

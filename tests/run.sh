@@ -209,9 +209,9 @@ PY
         "    if [ \"\$has_wreset\" = true ] && [ -n \"\$PK_RESET_AT\" ]; then" \
         "    if false; then"
 
-    prove_one "an announced restart is applied after it as well as before" statusline.sh \
-        "                week_span=\$(( week_reset - _ra_ep ))" \
-        "                :"
+    prove_one "an announced restart is never dated at its instant" statusline.sh \
+        "            _qo_origin=\$_qo_ra" \
+        "            :"
 
     prove_one "LC_ALL=C hides the language in LANG again" statusline.sh \
         "        case \"\$_pk_l\" in \"\"|C|C.*|POSIX) continue ;; esac" \
@@ -932,6 +932,71 @@ printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"5","stamp":%s}\n' \
 render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
 has   "R15 a stale shared reading never backdates past a known restart" "d1/4" "$L2"
 quiet "R15"
+
+# The announcement is NOT confirmed: the counter reads 41% after the instant (an account whose
+# plan did not change, carrying the same line - measured 2026-10-15). Seven days, not a window
+# starting at the renewal: d4/7 rather than d2/5.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+render_at 200 "$h" "$(payload 10 41 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R16 an announcement the counter contradicts changes nothing" "d4/7" "$L2"
+quiet "R16"
+# And once judged it stays judged: the same account a little later, still 7 days.
+render_at 200 "$h" "$(payload 10 42 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R17 and a later reading does not revive it"                 "d4/7" "$L2"
+
+# Seen late AND after the counter climbed past the landing bar: 90% before the instant, 20% at
+# the first reading after it. The drop is the evidence; the restart is dated at the instant.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"90","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 20 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R18 a restart seen late above the landing bar is still dated" "d2/5" "$L2"
+
+# A quota-origin without a stamp (hand-made, or damaged): its time is unknown, so the landing
+# bar decides - 5% after the instant is accepted.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"5"}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R19 a reading of unknown time lets the landing bar decide"    "d2/5" "$L2"
+quiet "R19"
+
+# A rejected announcement does not come back through a stale shared file. Publication off; the
+# shared file is from before the instant (90%); quota-origin judged and rejected it an hour after
+# the instant (41%). A real restart now (5%) is dated now, not backdated to the announcement.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=no
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"stamp":%s,"five_hour_used_pct":"10","seven_day_used_pct":"90","five_hour_resets_at":"%s","seven_day_resets_at":"%s","session_id":"old"}\n' \
+    $((NOW - 172800)) $((NOW - 160000)) $((NOW + 302400)) > "$h/.claude/rate-limits.json"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"41","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 82800)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 5 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R20 a rejected announcement is not revived by a stale shared file" "d1/4" "$L2"
+
+# A restart seen late after some use: 25% before the instant, 20% at the first reading after it
+# (0% at the restart, 20 points spent since). A 5-point drop is enough evidence: refusing it
+# keeps seven days and hands back budget the old counter spent - the permissive side. The cost,
+# accepted on purpose: a small server correction across the instant on an unchanged plan
+# (42% -> 41%) is taken for a restart too, and that errs stingy.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=no
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"25","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+render_at 200 "$h" "$(payload 10 20 $((NOW + 7200)) $((NOW + 302400)))"
+has   "R21 any drop across the instant confirms an announcement"   "d2/5" "$L2"
 
 # A date outside the current window, a malformed one, and no line at all: seven days.
 for spec in "R10|$(at 864000 %Y-%m-%d)|outside the window" "R11|2026-1-5|malformed" "R12||absent"; do
