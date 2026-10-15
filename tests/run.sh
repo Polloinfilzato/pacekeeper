@@ -622,7 +622,7 @@ pace_of() {   # $1 used%, $2 minutes to the reset -> PACE (text) and PACE_COL (n
     raw=$(HOME="$h" TMPDIR="$h/tmp/" CC_STATUSLINE_LANG=en COLUMNS=200 bash "$SL" < "$h/in.json" 2>/dev/null | sed -n 2p)
     seg=${raw%%│*}
     case "$(printf '%s' "$seg" | grep -o $'\033\[[0-9;]*m(' | tail -1)" in
-        $'\033[31m('*)                RGB=red ;;
+        $'\033[38;2;230;60;60m('*)    RGB=red ;;
         $'\033[38;2;255;165;0m('*)    RGB=amber ;;
         $'\033[33m('*)                RGB=yellow ;;
         $'\033[38;2;0;200;0m('*)      RGB=green ;;

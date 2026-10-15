@@ -284,7 +284,10 @@ ORANGE=$'\033[33m'
 BLUE=$'\033[34m'
 CYAN=$'\033[36m'
 GRAY=$'\033[90m'
-RED=$'\033[31m'
+# Red is a warning, so it is true-colour like the two below: the 16 basic colours belong
+# to the terminal theme, and a near-monochrome theme repaints ANSI red as grey-teal (seen
+# on iTerm2 "Black Metal"), which turns every alarm on this line into a neutral tint.
+RED=$'\033[38;2;230;60;60m'
 RESET=$'\033[0m'
 GIT_GREEN=$'\033[38;2;0;200;0m'
 GIT_ORANGE=$'\033[38;2;255;165;0m'
