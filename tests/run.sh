@@ -1607,6 +1607,13 @@ grep -q statusLine "$h/.claude/settings.json" && ok || bad "I1c settings.json is
 grep -q '^PUBLISH_STATE=no' "$h/.claude/subscription.conf" && ok \
     || bad "I2  --yes never turns publishing on by omission" "PUBLISH_STATE=no" "$(cat "$h/.claude/subscription.conf")"
 
+# The preview draws made-up numbers; none of them may land in the real home as account state.
+for f in rate-limits.json quota-origin quota-state plan-seen plan-changes.log; do
+    [ -e "$h/.claude/$f" ] && bad "I1d the preview writes no $f into the real home" "absent" "$(cat "$h/.claude/$f")" || ok
+done
+has   "I1e the preview is still drawn" "[Opus 5]" "$(cat "$h/install.log")"
+hasnt "I1f and it did not fail" "the preview failed" "$(cat "$h/install.log")"
+
 # Installing again on a machine that has already run this status line: the runtime
 # directories exist, and two of them are directories by design.
 install_into "$h" --yes

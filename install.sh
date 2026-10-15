@@ -20,7 +20,7 @@
 #     message then gets printed over a failure.
 set -euo pipefail
 
-VERSION="1.4.6"
+VERSION="1.4.7"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
@@ -679,8 +679,29 @@ now=$(date +%s)
 preview_json=$(printf '{"workspace":{"current_dir":"%s"},"model":{"display_name":"Opus 5"},"transcript_path":"","context_window":{"used_percentage":42},"rate_limits":{"five_hour":{"used_percentage":22,"resets_at":%s},"seven_day":{"used_percentage":41,"resets_at":%s}},"effort":{"level":"high"}}' \
     "$SRC_DIR" "$((now + 4300))" "$((now + 320000))")
 say ""
-if ! printf '%s\n' "$preview_json" | bash "$CLAUDE_DIR/statusline.sh"; then
-    warn "the preview failed — the numbers in it are made up, but the failure is real"
+# THE PREVIEW RUNS IN A THROWAWAY HOME. The status line writes shared state where it runs:
+# rate-limits.json, quota-origin, quota-state, plan-seen. Run against the real home, the
+# made-up numbers above landed in those files as if they were the account's own - measured
+# 2026-10-15 on an account with no session open to overwrite them: 41% and a weekly reset
+# 320000 s away were read back as real, and a restart that had happened looked refuted.
+# What the drawing reads is put in: the settings, and from the profile ONLY the field that
+# names the plan (the profile carries account data the preview has no use for). Its caches go
+# in there too (TMPDIR), and the directory goes away even if the install is interrupted.
+_pv_home=$(mktemp -d "${TMPDIR:-/tmp}/pacekeeper-preview.XXXXXX") || _pv_home=""
+if [ -n "$_pv_home" ]; then
+    trap 'rm -rf "$_pv_home"' EXIT INT TERM
+    mkdir -p "$_pv_home/.claude" "$_pv_home/tmp"
+    cp "$CONF" "$_pv_home/.claude/" 2>/dev/null || true
+    _pv_tier=""
+    [ -f "$HOME/.claude.json" ] && _pv_tier=$(sed -n 's/.*"organizationRateLimitTier"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$HOME/.claude.json" 2>/dev/null | head -1)
+    [ -n "$_pv_tier" ] && printf '{\n  "organizationRateLimitTier": "%s"\n}\n' "$_pv_tier" > "$_pv_home/.claude.json"
+    if ! printf '%s\n' "$preview_json" | HOME="$_pv_home" TMPDIR="$_pv_home/tmp/" bash "$CLAUDE_DIR/statusline.sh"; then
+        warn "the preview failed — the numbers in it are made up, but the failure is real"
+    fi
+    rm -rf "$_pv_home"
+    trap - EXIT INT TERM
+else
+    warn "no temporary directory for the preview — skipped, nothing else is affected"
 fi
 say ""
 say "${DIM}(made-up numbers — your real ones appear when Claude Code runs it)${N}"
