@@ -902,13 +902,52 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # reading is that recent; a session idle for hours has a transcript as old as its numbers.
     # Residual, accepted: a local-only entry (a slash command, a `!` shell line) touches the
     # transcript without a response, and lets an old reading through for those ten minutes.
+    # THE FILE DATE IS NOT THE DATE OF THE LAST ENTRY. Claude Code rewrites the last line of an
+    # idle transcript (`cost-state`, which carries no timestamp) without any new call. Measured
+    # 2026-11-01: after the five-hour window closed at 05:20, two idle sessions overwrote the
+    # shared file in turn every minute until 08:33 - 22% and 7%, a reading 19 hours old - and
+    # every 22 -> 7 passed the restart rule below: the week was moved to 08:34 and read d1/6
+    # instead of d2/7, on a counter that never went down. So a recent file date only opens the
+    # question, and the answer is the `timestamp` of the last dated entry. Across 400 real
+    # transcripts that entry sat at most 2925 bytes from the end, so the last 64 KiB hold it;
+    # one that cannot be found or read is not recent, which is the 1.4.8 behaviour.
     if ! [ "$five_reset" -gt "$_rl_now" ] 2>/dev/null; then
         _rl_recent=no
         if [ -n "$transcript_path" ] && [ "$transcript_path" != "null" ] && [ -f "$transcript_path" ]; then
             _rl_tage=$(( _rl_now - $(pk_mtime "$transcript_path") ))
-            [ "$_rl_tage" -ge -60 ] 2>/dev/null && [ "$_rl_tage" -le 600 ] 2>/dev/null && _rl_recent=yes
+            if [ "$_rl_tage" -ge -60 ] 2>/dev/null && [ "$_rl_tage" -le 600 ] 2>/dev/null; then
+                # The ENTRY's own `timestamp`, read by jq at the top level of each line. A text
+                # search took the last match anywhere, and a tool result carries timestamps of
+                # its own (an event, a file) - one dated 30 s ago made an entry 19 hours old
+                # look recent (Codex review, 2026-11-01). `fromjson?` skips the first line,
+                # which `tail -c` cuts in half, and anything else that is not JSON.
+                _rl_lts=$(tail -c 65536 "$transcript_path" 2>/dev/null \
+                    | jq -Rr 'fromjson? | objects | .timestamp | strings' 2>/dev/null \
+                    | tail -n 1)
+                _rl_lts=${_rl_lts%%.*}; _rl_lts=${_rl_lts%Z}
+                case "$_rl_lts" in
+                    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]) ;;
+                    *) _rl_lts="" ;;
+                esac
+                _rl_lep=""
+                [ -n "$_rl_lts" ] && _rl_lep=$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$_rl_lts" +%s 2>/dev/null \
+                                               || date -u -d "${_rl_lts}Z" +%s 2>/dev/null)
+                if pk_int "$_rl_lep"; then
+                    _rl_tage=$(( _rl_now - _rl_lep ))
+                    [ "$_rl_tage" -ge -60 ] 2>/dev/null && [ "$_rl_tage" -le 600 ] 2>/dev/null && _rl_recent=yes
+                fi
+            fi
         fi
         [ "$_rl_recent" = yes ] || { _rl_write=no; _rl_fresh=no; }
+        # AND EVEN A RECENT RESPONSE WITH NO FIVE-HOUR WINDOW MAY NOT LOWER a weekly figure
+        # already published for the same weekly window. Consumption does not fall inside a
+        # window; the one thing that lowers it is a restart, and a restart is only believed from
+        # a reading that has a live five-hour window (see the restart block below). A second line
+        # of defence for the case above, should the dating ever be fooled again.
+        if [ "$_rl_write" = yes ] && [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ] \
+           && [ "$_wp_int" -lt "$_rl_o7p" ] 2>/dev/null; then
+            _rl_write=no; _rl_fresh=no
+        fi
     fi
     if [ "$_rl_write" = yes ] && [ "$PK_PUBLISH" != no ] && [ "$_rl_locked" = yes ]; then
         { printf '%s\n' "$_rl_payload" > "$HOME/.claude/rate-limits.json.$$" \
@@ -934,7 +973,14 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # Also only under the lock. A process that lost the comparison was still writing this
     # derived file, and a snapshot that was never good enough to publish is not good
     # enough to change what the next window is measured against.
+    # AND ONLY FROM A READING WITH A LIVE FIVE-HOUR WINDOW. One without it is the last call of
+    # a session that has been quiet since that window closed (see the freshness exception
+    # above): with publication off there is no shared figure to stop it, and its old number,
+    # judged against `seen_pct`, reads as a restart (2026-11-01, d1/6 on a counter that never
+    # went down). A real restart arrives in a response, and a response carries the window;
+    # the one that lands a second before it closes is judged at the next call instead.
     if [ "$_rl_write" = yes ] && [ "$_rl_fresh" = yes ] && [ "$_rl_locked" = yes ] \
+       && [ "$five_reset" -gt "$_rl_now" ] 2>/dev/null \
        && [ -n "$week_reset" ] && [ "$week_reset" != "null" ] && [ -n "$_wp_int" ]; then
         _qo_origin=""; _qo_line=""; _qo_seen=""
         [ -f "$HOME/.claude/quota-origin" ] &&
@@ -978,7 +1024,20 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
         case "$_qo_shst" in ''|*[!0-9]*) _qo_shst="" ;; esac
         case "$_qo_line" in *'"stamp":'*) _qo_ownst=${_qo_line#*\"stamp\":}; _qo_ownst=${_qo_ownst%%[,\}]*} ;; esac
         case "$_qo_ownst" in ''|*[!0-9]*) _qo_ownst="" ;; esac
-        if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ] \
+        # A SHARED READING WITH NO FIVE-HOUR WINDOW IS NO YARDSTICK EITHER. It was published
+        # without passing through this block (which it may not enter), so its stamp says nothing
+        # about what this block has judged: taken as the previous reading, a 20% published from
+        # a response just past its window, after the instant of RESET_AT_RENEWAL, made the next
+        # live reading look like the second one after that instant, and the announcement was
+        # never judged at all (Codex review, 2026-11-01). `seen_pct` is then the yardstick.
+        # "No window" means none that was LIVE when it was written: missing, or a deadline not
+        # later than the reading's own stamp (the block can arrive already past). With no stamp
+        # to compare, a deadline that is present is taken as live, as before.
+        _qo_sh5live=no
+        if [ -n "$_rl_o5" ]; then
+            if [ -z "$_qo_shst" ] || [ "$_rl_o5" -gt "$_qo_shst" ] 2>/dev/null; then _qo_sh5live=yes; fi
+        fi
+        if [ -n "$_rl_o7p" ] && [ "$_rl_o7r" = "$week_reset" ] && [ "$_qo_sh5live" = yes ] \
            && { [ -z "$_qo_seen" ] || [ -z "$_qo_ownst" ] \
                 || { [ -n "$_qo_shst" ] && [ "$_qo_shst" -ge "$_qo_ownst" ]; }; }; then
             _qo_prev=$_rl_o7p; _qo_pstamp=$_qo_shst

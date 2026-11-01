@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.9/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.10/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.9/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.10/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -180,6 +180,9 @@ The failure is silent and it errs the permissive way: the brake reads a low numb
 through. `—pacekeeper—>` ranks snapshots by the fields an idle writer cannot fake — the five-hour
 deadline and the weekly one — and declines to write when it cannot show it is the fresher one. In
 practice that is what stops a window left open since yesterday from speaking for today.
+Once the five-hour window has closed, a snapshot with none of its own can still be drawn but
+can no longer lower the weekly figure, and it never decides where the week started: an idle
+window used to pass for a counter that had restarted, and shortened the week by a day.
 
 **What it does NOT do, stated plainly, because the difference matters.** The payload carries no
 observation timestamp, so two snapshots sharing a five-hour deadline cannot be ordered at all;

@@ -119,6 +119,33 @@ PY
         "            elif awk -v a=\"\$five_pct\" -v b=\"\$_sh_p\" 'BEGIN{ exit !(b > a) }'; then" \
         "            elif false; then"
 
+    prove_one "an idle session with a touched transcript lowers the shared figure again" statusline.sh \
+        "           && [ \"\$_wp_int\" -lt \"\$_rl_o7p\" ] 2>/dev/null; then
+            _rl_write=no; _rl_fresh=no" \
+        "           && false; then
+            _rl_write=no; _rl_fresh=no"
+
+    prove_one "a timestamp inside a tool result dates the entry again" statusline.sh \
+        "jq -Rr 'fromjson? | objects | .timestamp | strings'" \
+        "jq -Rr 'fromjson? | objects | (.. | .timestamp? // empty) | strings'"
+
+    prove_one "an expired five-hour deadline makes a yardstick again" statusline.sh \
+        "[ \"\$_rl_o5\" -gt \"\$_qo_shst\" ] 2>/dev/null; then _qo_sh5live=yes; fi" \
+        "true; then _qo_sh5live=yes; fi"
+
+    prove_one "a touched transcript dates an idle session again" statusline.sh \
+        "                    _rl_tage=\$(( _rl_now - _rl_lep ))" \
+        "                    _rl_tage=0"
+
+    prove_one "a shared reading with no five-hour window is the yardstick again" statusline.sh \
+        "[ \"\$_rl_o7r\" = \"\$week_reset\" ] && [ \"\$_qo_sh5live\" = yes ] \\" \
+        "[ \"\$_rl_o7r\" = \"\$week_reset\" ] \\"
+
+    prove_one "a reading with no five-hour window moves the week again" statusline.sh \
+        "       && [ \"\$five_reset\" -gt \"\$_rl_now\" ] 2>/dev/null \\
+       && [ -n \"\$week_reset\" ]" \
+        "       && [ -n \"\$week_reset\" ]"
+
     prove_one "the shared number is allowed to bounce again" statusline.sh \
         "                 && awk -v a=\"\$five_pct\" -v b=\"\$_rl_o5p\" 'BEGIN{ exit !(a < b) }' 2>/dev/null; then" \
         "                 && false; then"
@@ -1023,12 +1050,28 @@ done
 
 # The exception: the same payload from a session whose transcript was written a minute ago (a
 # response that landed just before its five-hour window closed) is recent, and is published.
-# One written an hour ago is not.
-for spec in "W3|60|yes" "W4|3600|no"; do
-    id=${spec%%|*}; rest=${spec#*|}; age=${rest%%|*}; pub=${rest#*|}
+# One written an hour ago is not. And one whose FILE was touched a minute ago while its last
+# dated entry is 19 hours old (W5: Claude Code rewrites the undated `cost-state` tail of idle
+# transcripts - measured 2026-11-01) is not recent either.
+# A transcript as Claude Code writes it: a dated entry $1 seconds old, then the undated tail.
+transcript_dated() {
+    printf '{"type":"assistant","timestamp":"%s"}\n{"type":"cost-state","totalDuration":1}\n' \
+        "$(py "import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(seconds=$1)).strftime('%Y-%m-%dT%H:%M:%S.000Z'))")" > "$2"
+}
+# W6: the same 19-hour-old entry carrying a timestamp of its own 30 s old inside a tool result.
+transcript_nested() {
+    py "import datetime,json
+n=datetime.datetime.now(datetime.timezone.utc)
+f=lambda s:(n-datetime.timedelta(seconds=s)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+print(json.dumps({'type':'user','timestamp':f(68400),'toolUseResult':{'structuredContent':{'timestamp':f(30)}}}))
+print(json.dumps({'type':'cost-state','totalDuration':1}))" > "$2"
+}
+for spec in "W3|60|60|yes" "W4|3600|3600|no" "W5|30|68400|no" "W6|30|nested|no"; do
+    id=${spec%%|*}; rest=${spec#*|}; age=${rest%%|*}; rest=${rest#*|}; dated=${rest%%|*}; pub=${rest#*|}
     h=$(new_home)
     conf "$h" "PUBLISH_STATE=yes"
-    tr="$h/t.jsonl"; : > "$tr"
+    tr="$h/t.jsonl"
+    if [ "$dated" = nested ]; then transcript_nested 0 "$tr"; else transcript_dated "$dated" "$tr"; fi
     touch -t "$(at -"$age" %Y%m%d%H%M.%S)" "$tr"
     P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","rate_limits":{"seven_day":{"used_percentage":64,"resets_at":%s}}}' "$tr" $((NOW + 302400)))
     render_at 200 "$h" "$P"
@@ -1040,6 +1083,87 @@ for spec in "W3|60|yes" "W4|3600|no"; do
     fi
     quiet "$id"
 done
+
+# A TRANSCRIPT WRITTEN A MINUTE AGO DOES NOT MAKE AN OLD READING NEW. Measured 2026-11-01:
+# after the five-hour window closed at 05:20, two idle sessions overwrote the shared file in
+# turn every minute until 08:33 - 22% (the live figure) and 7% (a session idle since 13:31 the
+# day before). Claude Code rewrites the last line of an idle transcript (`cost-state`), so the
+# exception above let both through, and every 22 -> 7 passed the restart rule: the week was
+# moved to 08:34 and read d1/6 instead of d2/7, on a counter that never went down.
+# W5 stops that at the dating. These two cases check the second line of defence, should the
+# dating be fooled again: a reading with no live five-hour window and a transcript whose last
+# dated entry is 30 s old must still not lower the shared figure, write quota-state from it or
+# move the origin - with publication on (Y1) and off (Y2, judged against `seen_pct`).
+for spec in "Y1|yes" "Y2|no"; do
+    id=${spec%%|*}; pubon=${spec#*|}
+    h=$(new_home)
+    conf "$h" "PUBLISH_STATE=$pubon"
+    tr="$h/t.jsonl"; transcript_dated 30 "$tr"
+    if [ "$pubon" = yes ]; then
+        printf '{"stamp":%s,"five_hour_used_pct":"","seven_day_used_pct":"22","five_hour_resets_at":"","seven_day_resets_at":"%s","session_id":"live"}\n' \
+            $((NOW - 60)) $((NOW + 302400)) > "$h/.claude/rate-limits.json"
+    fi
+    printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"22","stamp":%s}\n' \
+        $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 60)) > "$h/.claude/quota-origin"
+    origin_before=$(sed -E 's/.*"origin_ts":([0-9]+).*/\1/' "$h/.claude/quota-origin")
+    P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","rate_limits":{"seven_day":{"used_percentage":7,"resets_at":%s}}}' "$tr" $((NOW + 302400)))
+    render_at 200 "$h" "$P"
+    equals "$id  a stale 7% with a fresh transcript does not move the week" "$origin_before" \
+        "$(sed -E 's/.*"origin_ts":([0-9]+).*/\1/' "$h/.claude/quota-origin")"
+    if [ "$pubon" = yes ]; then
+        grep -q '"seven_day_used_pct":"22"' "$h/.claude/rate-limits.json" 2>/dev/null && ok \
+            || bad "$id  and the shared 22% is not overwritten by it" "22 in rate-limits.json" "$(cat "$h/.claude/rate-limits.json" 2>/dev/null)"
+        [ -e "$h/.claude/quota-state" ] && bad "$id  and no quota-state is written from it" "absent" "$(cat "$h/.claude/quota-state")" || ok
+    fi
+    quiet "$id"
+done
+# The other direction: the same drop from a reading WITH a live five-hour window is a restart,
+# and still moves the origin. Without this the case above passes on a rule that never fires.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes"
+printf '{"stamp":%s,"five_hour_used_pct":"","seven_day_used_pct":"22","five_hour_resets_at":"","seven_day_resets_at":"%s","session_id":"live"}\n' \
+    $((NOW - 60)) $((NOW + 302400)) > "$h/.claude/rate-limits.json"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"22","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 60)) > "$h/.claude/quota-origin"
+origin_before=$(sed -E 's/.*"origin_ts":([0-9]+).*/\1/' "$h/.claude/quota-origin")
+render_at 200 "$h" "$(payload 3 1 $((NOW + 7200)) $((NOW + 302400)))"
+origin_after=$(sed -E 's/.*"origin_ts":([0-9]+).*/\1/' "$h/.claude/quota-origin")
+[ "$origin_after" -gt "$origin_before" ] 2>/dev/null && ok \
+    || bad "Y3  a live reading at 1% after 22% is still a restart" "origin later than $origin_before" "$origin_after"
+quiet "Y3"
+# AN ANNOUNCEMENT IS NOT CONSUMED BY A READING THAT MAY NOT JUDGE IT (Codex review, 2026-11-01).
+# Same setting as R21, with no shared file yet: a response just past its five-hour window
+# publishes 20% after the announced instant without entering the restart block; the next live
+# reading (21%) must still be judged as the first one after the instant, against `seen_pct`.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"25","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+tr="$h/t.jsonl"; transcript_dated 20 "$tr"
+P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","rate_limits":{"seven_day":{"used_percentage":20,"resets_at":%s}}}' "$tr" $((NOW + 302400)))
+render_at 200 "$h" "$P"
+grep -q '"seven_day_used_pct":"20"' "$h/.claude/rate-limits.json" 2>/dev/null && ok \
+    || bad "Y4  the reading past its window is published" "20 in rate-limits.json" "$(cat "$h/.claude/rate-limits.json" 2>/dev/null)"
+render_at 200 "$h" "$(payload 10 21 $((NOW + 7200)) $((NOW + 302400)))"
+has   "Y4  and the next live reading still judges the announcement" "d2/5" "$L2"
+quiet "Y4"
+# Y5: the same, with the five-hour block present but already past instead of missing.
+h=$(new_home)
+conf "$h" "PUBLISH_STATE=yes
+RENEWAL_TIME=$(at -86400 %H:%M)
+RESET_AT_RENEWAL=$(at -86400 %Y-%m-%d)"
+printf '{"origin_ts":%s,"week_reset":%s,"seen_pct":"25","stamp":%s}\n' \
+    $((NOW + 302400 - 604800)) $((NOW + 302400)) $((NOW - 172800)) > "$h/.claude/quota-origin"
+tr="$h/t.jsonl"; transcript_dated 20 "$tr"
+P=$(printf '{"workspace":{"current_dir":"/tmp"},"model":{"display_name":"Opus 5"},"transcript_path":"%s","rate_limits":{"five_hour":{"used_percentage":40,"resets_at":%s},"seven_day":{"used_percentage":20,"resets_at":%s}}}' "$tr" $((NOW - 30)) $((NOW + 302400)))
+render_at 200 "$h" "$P"
+grep -q '"seven_day_used_pct":"20"' "$h/.claude/rate-limits.json" 2>/dev/null && ok \
+    || bad "Y5  the reading with a past five-hour deadline is published" "20 in rate-limits.json" "$(cat "$h/.claude/rate-limits.json" 2>/dev/null)"
+render_at 200 "$h" "$(payload 10 21 $((NOW + 7200)) $((NOW + 302400)))"
+has   "Y5  and the next live reading still judges the announcement" "d2/5" "$L2"
+quiet "Y5"
 
 # A date outside the current window, a malformed one, and no line at all: seven days.
 for spec in "R10|$(at 864000 %Y-%m-%d)|outside the window" "R11|2026-1-5|malformed" "R12||absent"; do
