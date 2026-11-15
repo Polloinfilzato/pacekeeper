@@ -765,8 +765,33 @@ if [ "$is_subscriber" = true ] && [ "$PK_CAN_WRITE" = yes ]; then
     # paths, session ids and usage figures - and it is off unless somebody asked for it.
     # The first version gated only `quota-state`, so answering "no" still left these on
     # disk; the README even claimed nothing was written. Measured 2026-09-03.
+    # THE READINGS LOG decides here whether this redraw carries a NEW reading, and writes
+    # its line further down, once the plan is known (see "THE READINGS LOG" below). The
+    # per-session file is about to be overwritten, so this is the last moment its previous
+    # content - this session's previous reading - can still be compared. A redraw repeats the
+    # numbers of the session's last API response; only a response changes them. So a session
+    # idle for hours writes nothing, and every session writes when ITS reading moves - those
+    # the shared file turns down included, which is the point: a counter that restarts inside
+    # one five-hour window loses that arbitration (see below), and it is exactly the reading
+    # the log exists to keep.
+    _rl_journal=no
     if [ "$PK_PUBLISH" != no ] && [ -n "$_rl_sid" ]; then
         _rl_dir="$HOME/.claude/rate-limits.d"
+        _rl_prev=""
+        # The redirection inside the braces: an input that cannot be opened is reported by
+        # the shell before a `2>/dev/null` written after it applies (Codex review 2026-11-15).
+        [ -f "$_rl_dir/$_rl_sid.json" ] && { { read -r _rl_prev < "$_rl_dir/$_rl_sid.json"; } 2>/dev/null || _rl_prev=""; }
+        # Into a variable, not through `$(...)`: three subshells on every redraw of every
+        # session is the cost this must not add. A field the old file lacks reads as "-",
+        # which no real value equals, so a first reading is always a new one.
+        _rl_pk() { case "$_rl_prev" in *"\"$1\":\""*) _rl_pv=${_rl_prev#*\"$1\":\"}; _rl_pv=${_rl_pv%%\"*} ;; *) _rl_pv="-" ;; esac; }
+        _rl_pk seven_day_used_pct;  [ "$_rl_pv" = "$week_pct" ]   || _rl_journal=yes
+        _rl_pk seven_day_resets_at; [ "$_rl_pv" = "$week_reset" ] || _rl_journal=yes
+        _rl_pk five_hour_resets_at; [ "$_rl_pv" = "$five_reset" ] || _rl_journal=yes
+        # The figures are kept AS RECEIVED: further down, `five_pct` may be replaced by a
+        # higher one another session published for the same window, and a log line mixing
+        # this session's weekly figure with another's five-hour one describes no reading.
+        _qr_week=$week_pct; _qr_five=$five_pct
         [ -d "$_rl_dir" ] || mkdir -p "$_rl_dir" 2>/dev/null
         { printf '%s\n' "$_rl_payload" > "$_rl_dir/$_rl_sid.json.$$" \
             && mv -f "$_rl_dir/$_rl_sid.json.$$" "$_rl_dir/$_rl_sid.json"; } 2>/dev/null
@@ -2036,6 +2061,58 @@ if [ -z "$tier_label" ]; then
         printf '%s %s' "$(( now + 21600 ))" "$tier_label" > "$tmp_tier" 2>/dev/null &&
             mv -f "$tmp_tier" "$tier_cache" 2>/dev/null
     fi
+fi
+
+# --- THE READINGS LOG: every new reading of the counters, one line each, kept ---
+# Every other file under ~/.claude keeps only the LAST reading - per session, or the freshest
+# one overall - so the question "what did the counter read just before and just after
+# midnight?" has no answer the morning after. It had none on 2026-11-15: the first renewal on
+# an unchanged plan (Max 5x -> Max 5x) happened at 00:15, the last surviving reading before it
+# was 98% at 01:21 the day before, the first after it 6% at 09:11, and whether the renewal had
+# restarted the weekly counter could only be guessed from how much 6% is. A plan CHANGE
+# restarts it (measured 2026-09-03 and 2026-09-15); a plain renewal is the open question.
+# So each reading that differs from the session's previous one (decided above, while that
+# previous one still existed) appends a line here: when, which machine, which plan, both
+# percentages and both deadlines. Read with `tail`, `grep 2026-12-15`, or any line tool.
+# COST: a redraw that repeats its numbers - nearly all of them - pays one read of its own
+# per-session file, above, and nothing here. A new reading pays a handful of processes
+# (`hostname`, `date`, `wc`, `tr`), a few times a day per session.
+# SIZE: past 2 MiB the log moves to `quota-readings.log.1`, replacing the previous one, and
+# starts again. A busy month is ~0.3 MiB, so the two together cover several months.
+# CONCURRENCY: appending needs no lock - one short line written with `>>` lands whole
+# (O_APPEND). Rotating does: two sessions that both measured the old log as too big would
+# otherwise rename it in turn, and the second rename would put the FRESH log over `.1`,
+# destroying the archive (Codex review 2026-11-15). So the rename happens under a `mkdir`
+# lock, after measuring again; a lock older than a minute belongs to a dead process.
+# KNOWN LIMITS: a line that cannot be appended is not retried (the per-session file already
+# holds the new reading); two windows writing the same session id alternate and log each
+# alternation. Both are bounded by the rotation.
+# Under the same answer as the per-session files: off unless PUBLISH_STATE=yes.
+if [ "${_rl_journal:-no}" = yes ]; then
+    _qr_log="$HOME/.claude/quota-readings.log"
+    pk_qr_size() { _qr_size=$(wc -c < "$_qr_log" 2>/dev/null | tr -d ' '); }
+    if [ -f "$_qr_log" ] && pk_qr_size && [ "${_qr_size:-0}" -gt 2097152 ] 2>/dev/null; then
+        _qr_lock="$_qr_log.rotating"; _qr_held=no
+        if mkdir "$_qr_lock" 2>/dev/null; then
+            _qr_held=yes
+        elif [ $(( _rl_now - $(pk_mtime "$_qr_lock") )) -gt 60 ] 2>/dev/null; then
+            rmdir "$_qr_lock" 2>/dev/null; mkdir "$_qr_lock" 2>/dev/null && _qr_held=yes
+        fi
+        # Somebody else holding it is rotating right now: this line goes into whatever log
+        # exists when it is appended, which is the point of not waiting.
+        if [ "$_qr_held" = yes ]; then
+            pk_qr_size
+            [ "${_qr_size:-0}" -gt 2097152 ] 2>/dev/null && mv -f "$_qr_log" "$_qr_log.1" 2>/dev/null
+            rmdir "$_qr_lock" 2>/dev/null
+        fi
+    fi
+    _qr_host=$(hostname -s 2>/dev/null || hostname 2>/dev/null); _qr_host=${_qr_host// /_}
+    _qr_plan=${tier_label:-unknown}; _qr_plan=${_qr_plan// /-}
+    _qr_w7r=$(pk_date "$week_reset" '+%Y-%m-%dT%H:%M%z'); _qr_h5r=$(pk_date "$five_reset" '+%Y-%m-%dT%H:%M%z')
+    { printf '%s host=%s plan=%s week=%s%% week_resets=%s five=%s%% five_resets=%s session=%s\n' \
+        "$(pk_date "$_rl_now" '+%Y-%m-%dT%H:%M:%S%z')" "${_qr_host:--}" "$_qr_plan" \
+        "${_qr_week:--}" "${_qr_w7r:--}" "${_qr_five:--}" "${_qr_h5r:--}" "${_rl_sid%%-*}" \
+        >> "$_qr_log"; } 2>/dev/null
 fi
 
 # --- A plan that CHANGED: write down when, and on an upgrade move the billing anniversary ---

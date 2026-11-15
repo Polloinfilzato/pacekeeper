@@ -252,6 +252,26 @@ PY
         "            status = \"manual\"" \
         "            pass"
 
+    prove_one "a new reading no longer reaches the readings log" statusline.sh \
+        "        _rl_pk seven_day_used_pct;  [ \"\$_rl_pv\" = \"\$week_pct\" ]   || _rl_journal=yes" \
+        "        _rl_pk seven_day_used_pct;  [ \"\$_rl_pv\" = \"\$week_pct\" ]   || :"
+
+    prove_one "the readings log grows without a limit again" statusline.sh \
+        "&& mv -f \"\$_qr_log\" \"\$_qr_log.1\" 2>/dev/null" \
+        "&& :"
+
+    prove_one "the readings log copies instead of rotating" statusline.sh \
+        "&& mv -f \"\$_qr_log\" \"\$_qr_log.1\" 2>/dev/null" \
+        "&& cp \"\$_qr_log\" \"\$_qr_log.1\" 2>/dev/null"
+
+    prove_one "the readings log writes the adopted five-hour figure" statusline.sh \
+        "\"\${_qr_five:--}\"" \
+        "\"\${five_pct:--}\""
+
+    prove_one "a lock held by another session no longer stops the rotation" statusline.sh \
+        "        if [ \"\$_qr_held\" = yes ]; then" \
+        "        if true; then"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -793,6 +813,78 @@ h=$(new_home); conf "$h" "$(printf 'PUBLISH_STATE=yes\n')"
 render "$h" "$(payload 22.5 41.2)"
 [ -e "$h/.claude/rate-limits.json" ] && ok || bad "U   publishing on: rate-limits.json" "present" "absent"
 [ -e "$h/.claude/quota-state" ]     && ok || bad "U   publishing on: quota-state"     "present" "absent"
+
+# ================================================== 5a. the readings log
+section "The readings log: one line per NEW reading, kept across sessions"
+
+# Why it exists: on 2026-11-15 the renewal at 00:15 could not be judged, because every file
+# on disk held only the LAST reading of its session and the readings around midnight were
+# gone. The log keeps them. A redraw repeating its numbers must add nothing (a session idle
+# for hours would otherwise fill it), a changed number must add one line, and a drop the
+# shared file refuses (same five-hour window, lower weekly figure) must still be logged:
+# that refused drop is precisely a restart at renewal.
+qlog() { cat "$1/.claude/quota-readings.log" 2>/dev/null; }
+qlines() { qlog "$1" | grep -c ''; }
+NOW=$(date +%s)
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"
+T1="$h/sess-aaaa1111-0000.jsonl"; F5=$((NOW + 7200)); W7=$((NOW + 300000))
+render "$h" "$(payload 10 40 "$F5" "$W7" "$T1")"; quiet "Q1"
+equals "Q1  the first reading of a session is one line"          "1" "$(qlines "$h")"
+has    "Q1b it names the plan"                                   "plan=Max-5x" "$(qlog "$h")"
+has    "Q1c and the weekly figure"                               "week=40%" "$(qlog "$h")"
+has    "Q1d and the machine"                                     "host=$(hostname -s | tr ' ' _)" "$(qlog "$h")"
+has    "Q1e and the session"                                     "session=sess" "$(qlog "$h")"
+render "$h" "$(payload 10 40 "$F5" "$W7" "$T1")"
+render "$h" "$(payload 10 40 "$F5" "$W7" "$T1")"
+equals "Q2  a redraw that repeats its numbers adds nothing"      "1" "$(qlines "$h")"
+render "$h" "$(payload 12 41 "$F5" "$W7" "$T1")"
+equals "Q3  a moved weekly figure adds a line"                   "2" "$(qlines "$h")"
+render "$h" "$(payload 0 0 "$F5" "$W7" "$T1")"; quiet "Q4"
+equals "Q4  a drop the shared file refuses is still logged"      "3" "$(qlines "$h")"
+has    "Q4b with the figure it read"                             "week=0%" "$(qlog "$h" | tail -1)"
+# The script then adopts the higher five-hour figure another session published for the same
+# window (12%), for DRAWING. The log line must keep the five-hour figure this reading carried.
+has    "Q4d and the five-hour figure it read, not the adopted one" "five=0%" "$(qlog "$h" | tail -1)"
+equals "Q4c while the shared file keeps the higher one"          "41" \
+       "$(sed 's/.*"seven_day_used_pct":"\([^"]*\)".*/\1/' "$h/.claude/rate-limits.json")"
+T2="$h/sess-bbbb2222-0000.jsonl"
+render "$h" "$(payload 12 41 "$F5" "$W7" "$T2")"
+equals "Q5  a second session logs its own first reading"         "4" "$(qlines "$h")"
+render "$h" "$(payload 12 41 "$F5" $((W7 + 604800)) "$T2")"
+has    "Q6  a new weekly deadline adds a line"                   "$(date -r $((W7 + 604800)) '+%Y-%m-%dT%H:%M' 2>/dev/null || date -d @$((W7 + 604800)) '+%Y-%m-%dT%H:%M')" "$(qlog "$h" | tail -1)"
+# GNU first: BSD rejects `-c` with nothing on stdout, while GNU `stat -f` prints a whole
+# filesystem report before failing, which would end up in the captured value.
+[ "$(stat -c %a "$h/.claude/quota-readings.log" 2>/dev/null || stat -f %Lp "$h/.claude/quota-readings.log")" = 600 ] \
+    && ok || bad "Q7  the log is private to its owner" "600" "other"
+
+# Publishing off writes no log, like every other per-session file.
+h=$(new_home); conf "$h" "PUBLISH_STATE=no"
+render "$h" "$(payload 10 40 "$F5" "$W7" "$h/sess-cccc.jsonl")"
+[ -e "$h/.claude/quota-readings.log" ] && bad "Q8  publishing off: no readings log" "absent" "present" || ok
+
+# Past 2 MiB the log moves aside and starts again: bounded, and the old lines are kept once.
+# The fixture is made of LINES, and the sizes are checked, not the line count alone: a copy
+# instead of a rename would also leave one new line at the bottom of a log still 2 MiB big.
+qsize() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
+qfill() { python3 -c "import sys; sys.stdout.write(('x' * 99 + '\\n') * 22000)" > "$1/.claude/quota-readings.log"; }
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"; qfill "$h"
+render "$h" "$(payload 10 40 "$F5" "$W7" "$h/sess-dddd.jsonl")"; quiet "Q9"
+equals "Q9  past the limit the log starts again"                 "1" "$(qlines "$h")"
+equals "Q9b the previous log is kept whole as .1"                "2200000" "$(qsize "$h/.claude/quota-readings.log.1")"
+[ "$(qsize "$h/.claude/quota-readings.log")" -lt 1000 ] && ok \
+    || bad "Q9c and the active log is small again" "< 1000 bytes" "$(qsize "$h/.claude/quota-readings.log")"
+[ -e "$h/.claude/quota-readings.log.rotating" ] && bad "Q9d the rotation lock is released" "absent" "present" || ok
+
+# Another session rotating right now (a fresh lock) is left alone: no rename, the line is
+# simply appended. A lock a minute old belongs to a dead process and is taken over.
+h=$(new_home); conf "$h" "PUBLISH_STATE=yes"; qfill "$h"; mkdir "$h/.claude/quota-readings.log.rotating"
+render "$h" "$(payload 10 40 "$F5" "$W7" "$h/sess-eeee.jsonl")"; quiet "Q10"
+[ -e "$h/.claude/quota-readings.log.1" ] && bad "Q10 a lock held by another session stops the rename" "no .1" ".1 present" || ok
+equals "Q10b and the line is appended all the same"               "22001" "$(qlines "$h")"
+touch -t "$(date -r $((NOW - 120)) '+%Y%m%d%H%M.%S' 2>/dev/null || date -d @$((NOW - 120)) '+%Y%m%d%H%M.%S')" \
+    "$h/.claude/quota-readings.log.rotating"
+render "$h" "$(payload 11 41 "$F5" "$W7" "$h/sess-eeee.jsonl")"; quiet "Q10c"
+equals "Q10d a dead lock is taken over and the log rotates"      "1" "$(qlines "$h")"
 
 # ================================================== 5b. the mid-window restart
 section "A counter that restarts in the middle of its window"

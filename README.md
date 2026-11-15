@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.10/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.11/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.10/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.11/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -513,6 +513,7 @@ So `—pacekeeper—>` writes what it learns to disk, atomically:
 | `~/.claude/rate-limits.json` | the freshest snapshot across all your open sessions |
 | `~/.claude/rate-limits.d/<session>.json` | one file per session, so a conflict stays diagnosable |
 | `~/.claude/context-usage/<session>.json` | context fill per session |
+| `~/.claude/quota-readings.log` | one line for every NEW reading of the two counters, with machine, plan and deadlines — the history the other files do not keep (rotated past 2 MiB) |
 
 **This is off unless you ask for it.** The installer asks, and the default answer is no: those
 files carry paths, session identifiers and usage figures, and none of them is written until you
@@ -642,6 +643,10 @@ week is over, so a forgotten one costs nothing the month after.
 Why not simply assume every renewal restarts the counter: Anthropic does not say, and the one
 report found of a renewal on the **same** plan says the counter carried on. Assuming it would make
 the line hand out the whole allowance before the renewal and leave nothing for the days after it.
+
+To settle it on your own account, look at `~/.claude/quota-readings.log` (written when publishing
+is on) for the readings either side of a renewal on an unchanged plan: a weekly figure that falls
+to a few percent at the renewal minute, with the same weekly deadline, is a restart.
 
 ---
 

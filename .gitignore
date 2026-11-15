@@ -5,6 +5,7 @@ quota-origin
 rate-limits.json
 rate-limits.d/
 context-usage/
+quota-readings.log*
 *.bak-*
 
 # Build noise
