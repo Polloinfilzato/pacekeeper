@@ -2312,13 +2312,32 @@ pk_cols() {
 # The visible width of a block: the colour escapes are bytes on the wire and zero columns
 # on the screen. `${#s}` counts CHARACTERS, not bytes, so the box-drawing bar and the
 # accented labels count as the one column they occupy.
+#
+# UNDER LC_ALL=C `${#}` COUNTS BYTES, and that is not a corner case: Claude Code hands its
+# own environment to every render, and a session started from a shell that exports LC_ALL=C
+# runs the status line under it (measured 2026-11-15: a live `claude` process with LC_ALL=C
+# beside LANG=it_IT.UTF-8). Every bar cell, every `│`, every accented letter then weighed two
+# or three columns, a Japanese glyph six, and the line folded long before the edge - the
+# Japanese line 2 broke at 200 columns while needing about 120. So the measurement switches
+# to a UTF-8 character type for its own duration: a `local LC_ALL` is restored on return
+# (checked on bash 3.2 and 5.3), the function runs no command, and nothing else in the script
+# sees the change. C.UTF-8 keeps every other C convention; on a system that has neither it
+# nor en_US.UTF-8 the old overestimate stays, which folds early and never truncates.
+_pk_g='日'
+PK_WIDTH_LOC=""
+if [ "${#_pk_g}" -ne 1 ]; then
+    pk_try_loc() { { local LC_ALL=$1; } 2>/dev/null; [ "${#_pk_g}" -eq 1 ]; }
+    for _pk_l in C.UTF-8 en_US.UTF-8; do
+        pk_try_loc "$_pk_l" && { PK_WIDTH_LOC=$_pk_l; break; }
+    done
+fi
 pk_visible() {
+    [ -n "$PK_WIDTH_LOC" ] && { local LC_ALL=$PK_WIDTH_LOC; } 2>/dev/null
     local _s=${1//$'\033'\[*([0-9;])m/}
     # Kana and CJK ideographs take TWO columns each and `${#}` counts them as one, so a
     # Japanese or Chinese line measured by characters alone overruns the edge by one column
     # per glyph - and past the edge Claude Code cuts, it does not wrap. Each wide glyph is
-    # counted twice. Under a C locale bash 5 counts bytes instead, three per glyph: an
-    # overestimate, which folds early and never truncates.
+    # counted twice.
     local _wide=${_s//[^぀-ゟ゠-ヿ一-鿿]/}
     printf '%s' "$(( ${#_s} + ${#_wide} ))"
 }

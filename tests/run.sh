@@ -272,6 +272,10 @@ PY
         "        if [ \"\$_qr_held\" = yes ]; then" \
         "        if true; then"
 
+    prove_one "the width is counted in bytes again under LC_ALL=C" statusline.sh \
+        "    [ -n \"\$PK_WIDTH_LOC\" ] && { local LC_ALL=\$PK_WIDTH_LOC; } 2>/dev/null" \
+        "    :"
+
     printf '\n%d of %d mutations were caught\n' "$PROVEN" "$((PROVEN + UNPROVEN))"
     [ "$UNPROVEN" -eq 0 ] || exit 1
     exit 0
@@ -1286,18 +1290,39 @@ for spec in \
     "zh|今日尚余 17.1% / 14.3%|第4天/7"
 do
     lang=${spec%%|*}; rest=${spec#*|}; label=${rest%%|*}; didx=${rest#*|}
-    COLUMNS=200 render_lang "$lang" "$h" "$P"
-    has   "L-$lang  balance and yardstick"   "($label)" "$L2"
-    has   "L-$lang  day counter"             " $didx " "$L2"
-    quiet "L-$lang"
+    # Under BOTH character types: a UTF-8 one, and LC_ALL=C, where bash counts bytes. Claude
+    # Code passes its own environment to the render, and a session started from a shell that
+    # exports LC_ALL=C is a real one (measured 2026-11-15). Before 1.4.12 the Japanese line
+    # 2 folded at 200 columns under C, and these cases passed or failed with whatever locale
+    # the person running the suite happened to have.
+    for loc in en_US.UTF-8 C; do
+        LC_ALL=$loc COLUMNS=200 render_lang "$lang" "$h" "$P"
+        has   "L-$lang-$loc  balance and yardstick"   "($label)" "$L2"
+        has   "L-$lang-$loc  day counter"             " $didx " "$L2"
+        quiet "L-$lang-$loc"
+    done
 done
+
+# THE FOLD MEASURES COLUMNS, WHATEVER THE LOCALE. The full Italian line 2 is rendered wide,
+# its true width is measured by Python (bar cells, `│` and accents are one column each), and
+# the line is rendered again in a terminal exactly that wide, under LC_ALL=C: it must not
+# fold. Counting bytes made it about 20 columns wider than it is.
+h2=$(new_home); conf "$h2" "PUBLISH_STATE=no"
+COLUMNS=400 render_lang it "$h2" "$P"; it_n=$NLINES
+it_w=$(printf '%s' "$OUT" | python3 -c 'import sys; print(max(len(l) for l in sys.stdin.read().split("\n")))')
+LC_ALL=C COLUMNS=$it_w render_lang it "$h2" "$P"
+equals "L-it-C1 a terminal exactly as wide as the line does not fold it" "$it_n" "$NLINES"
+LC_ALL=C COLUMNS=$((it_w - 1)) render_lang it "$h2" "$P"
+[ "$NLINES" -gt "$it_n" ] && ok || bad "L-it-C2 one column less does" "more than $it_n lines" "$NLINES"
 
 # WIDE GLYPHS ARE TWO COLUMNS. A Japanese line has fewer characters than columns, and a
 # fold that counts characters lets it overrun the edge - where Claude Code cuts it. The
 # oracle here is Python's east-asian-width table, not the script's own count: the terminal
 # is asked for exactly as many columns as the line has CHARACTERS, and it has to fold.
 COLUMNS=200 render_lang ja "$h" "$P"
-ja_chars=${#L2}
+# Characters counted by Python, not `${#}`: under LC_ALL=C the shell running this suite counts
+# bytes, and the oracle would then measure the locale instead of the line.
+ja_chars=$(printf '%s' "$L2" | python3 -c 'import sys; print(len(sys.stdin.read()))')
 ja_cols=$(printf '%s' "$L2" | python3 -c 'import sys,unicodedata; s=sys.stdin.read(); print(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s))')
 [ "$ja_cols" -gt "$ja_chars" ] && ok || bad "L-ja-w1 the oracle sees wide glyphs" "columns > characters" "$ja_cols vs $ja_chars"
 COLUMNS=$ja_chars render_lang ja "$h" "$P"
