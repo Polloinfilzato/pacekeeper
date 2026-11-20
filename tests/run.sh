@@ -384,19 +384,20 @@ section() { printf '\n%s\n' "$1"; }
 section "The renewal countdown"
 
 h=$(new_home); render "$h" "$(payload 22.5 41.2)"
-hasnt "R1  no config file: the charge is not mentioned" "billed" "$L2"
-has   "R1b no config file: the plan still is"           "plan"   "$L2"
+hasnt "R1  no config file: the charge is not mentioned" "Max 5x (" "$L2"
+has   "R1b no config file: the plan still is"           "Max 5x" "$L2"
+hasnt "R1c and it is not preceded by a plan word"     "plan Max" "$L2"
 
 h=$(new_home); conf "$h" "RENEWAL_DAY=$TODAY_DOM"; render "$h" "$(payload 22.5 41.2)"
-has   "R2  renewal today, no time declared" "billed today" "$L2"; quiet "R2"
+has   "R2  renewal today, no time declared" "Max 5x (today)" "$L2"; quiet "R2"
 
 h=$(new_home); conf "$h" "RENEWAL_DAY=$TOMORROW_DOM"; render "$h" "$(payload 22.5 41.2)"
-has   "R3  renewal tomorrow" "billed tomorrow" "$L2"; quiet "R3"
+has   "R3  renewal tomorrow" "Max 5x (tomorrow)" "$L2"; quiet "R3"
 
 if [ -n "$SOON" ]; then
     h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=%s\n' "$TODAY_DOM" "$SOON")"
     render "$h" "$(payload 22.5 41.2)"
-    matches "R4  today, charge still ahead: an hours countdown" "billed in [0-9]+[hm]" "$L2"
+    matches "R4  today, charge still ahead: an hours countdown" "Max 5x \\(-[0-9]+[hm]" "$L2"
     quiet "R4"
 else
     skip "R4  today, charge still ahead" "less than 70 minutes of today left"
@@ -404,30 +405,33 @@ fi
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=00:00\n' "$TODAY_DOM")"
 render "$h" "$(payload 22.5 41.2)"
-matches "R5  today but already charged: rolls to the next one" "billed in [0-9]+d" "$L2"
+matches "R5  today but already charged: rolls to the next one" "Max 5x \\(-[0-9]+d\\)" "$L2"
 
 h=$(new_home); conf "$h" "RENEWAL=$IN45"; render "$h" "$(payload 22.5 41.2)"
-has   "R6  a fixed date 45 days out" "billed in 45d" "$L2"
+has   "R6  a fixed date 45 days out" "Max 5x (-45d)" "$L2"
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL=2020-01-01\nPERIOD=yearly\n')"
 render "$h" "$(payload 22.5 41.2)"
-matches "R7  a past yearly date recurs" "billed in [0-9]+d" "$L2"
+matches "R7  a past yearly date recurs" "Max 5x \\(-[0-9]+d\\)" "$L2"
 
 h=$(new_home); conf "$h" "RENEWAL=2020-01-01"; render "$h" "$(payload 22.5 41.2)"
-hasnt "R8  a past one-off date is not drawn" "billed" "$L2"
+hasnt "R8  a past one-off date is not drawn" "Max 5x (" "$L2"
 
 h=$(new_home); conf "$h" "RENEWAL_DAY=31"; render "$h" "$(payload 22.5 41.2)"
-matches "R9  day 31 in a month that has 30" "billed (today|tomorrow|in [0-9]+[dhm])" "$L2"
+matches "R9  day 31 in a month that has 30" "Max 5x \\((today|tomorrow|-[0-9]+[dhm])" "$L2"
 
 h=$(new_home); conf "$h" "RENEWAL_DAY=abc"; render "$h" "$(payload 22.5 41.2)"
-hasnt "R10 a nonsense day draws no charge" "billed" "$L2"
-has   "R10b and does not take the plan down with it" "plan" "$L2"; quiet "R10"
+hasnt "R10 a nonsense day draws no charge" "Max 5x (" "$L2"
+has   "R10b and does not take the plan down with it" "Max 5x" "$L2"; quiet "R10"
 
 h=$(new_home); conf "$h" "RENEWAL_TIME=15:41"; render "$h" "$(payload 22.5 41.2)"
-hasnt "R11 a time with no date draws no charge" "billed" "$L2"; quiet "R11"
+hasnt "R11 a time with no date draws no charge" "Max 5x (" "$L2"; quiet "R11"
 
 h=$(new_home); : > "$h/.claude/subscription.conf"; render "$h" "$(payload 22.5 41.2)"
-has   "R12 an empty config still shows the plan" "plan" "$L2"; quiet "R12"
+has   "R12 an empty config still shows the plan" "Max 5x" "$L2"; quiet "R12"
+# With no plan name the bracket would hang on nothing, so the charge keeps its label.
+h=$(new_home); rm -f "$h/.claude.json"; conf "$h" "RENEWAL_DAY=3"; render "$h" "$(payload 22.5 41.2)"
+matches "R13 no plan known: the charge keeps its words" "billed (today|tomorrow|in [0-9]+[dhm])" "$L2"; quiet "R13"
 
 # ======================================================== 1b. a plan that changes
 section "A plan that changes: logged always, the anniversary moved only on an upgrade"
@@ -470,7 +474,7 @@ has     "P3f the note says where the exact minute is" "receipt"                 
 equals  "P3g exactly one RENEWAL_DAY line"           "1" "$(grep -c '^RENEWAL_DAY=' "$h/.claude/subscription.conf")"
 has     "P3h plan-seen now says the new plan"        "Max 20x" "$(cat "$h/.claude/plan-seen")"
 render "$h" "$(payload 22.5 41.2)"
-matches "P3i the countdown follows on the next redraw" "billed in (2[89]|3[01])d" "$L2"
+matches "P3i the countdown follows on the next redraw" "Max 20x \\(-(2[89]|3[01])d\\)" "$L2"
 equals  "P3j the change is noticed once"             "1" "$(grep -c upgrade "$h/.claude/plan-changes.log")"
 
 # P4: a downgrade is logged and moves nothing - it takes effect at the old anniversary.
@@ -563,13 +567,13 @@ section "RENEWAL_TIME: one grammar, and no arithmetic before it is checked"
 for t in "ab:cd" "99:99" "15:" ":41" "1 5:41" "24:00" "-1:00"; do
     h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=%s\n' "$TODAY_DOM" "$t")"
     render "$h" "$(payload 22.5 41.2)"
-    has  "T   [$t] degrades to the no-time behaviour" "billed today" "$L2"
+    has  "T   [$t] degrades to the no-time behaviour" "Max 5x (today)" "$L2"
     quiet "T   [$t]"
 done
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=8:5\n' "$TODAY_DOM")"
 render "$h" "$(payload 22.5 41.2)"
-matches "T8  [8:5] is a real time, normalised to 08:05" "billed (in [0-9]+[dhm]|today)" "$L2"
+matches "T8  [8:5] is a real time, normalised to 08:05" "Max 5x \\((-[0-9]+[dhm]|today)" "$L2"
 
 # The cache is a FILE ON DISK: an older version wrote two fields where there are now
 # three, and anyone can edit it. It is the one route by which an unchecked time can still
@@ -586,24 +590,24 @@ plant_cache() {   # $1 home, $2 the raw cache line
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=23:59\n' "$TODAY_DOM")"
 plant_cache "$h" "$(( $(date +%s) + 3600 )) 0"
 render "$h" "$(payload 22.5 41.2)"
-has     "T9  a two-field cache from an older version" "billed today" "$L2"; quiet "T9"
+has     "T9  a two-field cache from an older version" "Max 5x (today)" "$L2"; quiet "T9"
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=23:59\n' "$TODAY_DOM")"
 plant_cache "$h" "$(( $(date +%s) + 3600 )) 0 ab:cd"
 render "$h" "$(payload 22.5 41.2)"
-has     "T10 a corrupt time in the cache does not reach the arithmetic" "billed today" "$L2"
+has     "T10 a corrupt time in the cache does not reach the arithmetic" "Max 5x (today)" "$L2"
 quiet   "T10"
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=23:59\n' "$TODAY_DOM")"
 plant_cache "$h" "$(( $(date +%s) + 3600 )) 0 99:99"
 render "$h" "$(payload 22.5 41.2)"
-has     "T11 an out-of-range time in the cache is refused, not counted down" "billed today" "$L2"
+has     "T11 an out-of-range time in the cache is refused, not counted down" "Max 5x (today)" "$L2"
 quiet   "T11"
 
 h=$(new_home); conf "$h" "$(printf 'RENEWAL_DAY=%s\nRENEWAL_TIME=23:59\n' "$TODAY_DOM")"
 plant_cache "$h" "$(( $(date +%s) + 3600 )) 0 23:59"
 render "$h" "$(payload 22.5 41.2)"
-matches "T12 and a good time in the cache IS counted down" "billed in [0-9]+[hm]" "$L2"
+matches "T12 and a good time in the cache IS counted down" "Max 5x \\(-[0-9]+[hm]" "$L2"
 quiet   "T12"
 
 # ====================================================== 3. percentage grammar
@@ -745,8 +749,8 @@ render_at 60 "$h" "$(payload 22.5 41.2)"
 [ "$NLINES" -gt 2 ] && ok || bad "W2  a narrow terminal folds" "more than 2 lines" "$NLINES"
 w=$(widest)
 [ "$w" -le 60 ] && ok || bad "W3  and no folded line overruns the width" "<= 60" "$w"
-has   "W4  the block that used to fall off the edge is present" "plan" "$OUT"
-has   "W5  and so is the charge inside it" "billed" "$OUT"
+has   "W4  the block that used to fall off the edge is present" "Max 5x" "$OUT"
+has   "W5  and so is the charge inside it" "Max 5x (" "$OUT"
 
 # A block is never cut in half: each line either holds a whole block or starts a new one.
 render_at 60 "$h" "$(payload 22.5 41.2)"
@@ -993,14 +997,14 @@ section "The seven-day pace in percentage points as well as in time"
 h=$(new_home); conf "$h" "PUBLISH_STATE=no"
 NOW=$(date +%s)
 render_at 200 "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
-has   "V1  the reported case: 93% used with 18h53m left"          "(+4.2% | +7h " "$L2"
+has   "PP1  the reported case: 93% used with 18h53m left"          "(+4.2% | +7h " "$L2"
 render_at 200 "$h" "$(payload 20 10 $((NOW + 7200)) $((NOW + 302400)))"
-has   "V2  behind the average, both halves carry the minus"       "(-40.0% | -2d 19h)" "$L2"
+has   "PP2  behind the average, both halves carry the minus"       "(-40.0% | -2d 19h)" "$L2"
 render_at 200 "$h" "$(payload 20 50 $((NOW + 7200)) $((NOW + 302400)))"
-has   "V3  exactly on the average there is no sign to give"       "(0% | 0h)" "$L2"
+has   "PP3  exactly on the average there is no sign to give"       "(0% | 0h)" "$L2"
 COLUMNS=200 render_lang it "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
-has   "V4  the points use the decimal separator of the language"  "(+4,2% | +7h " "$L2"
-quiet "V5"
+has   "PP4  the points use the decimal separator of the language"  "(+4,2% | +7h " "$L2"
+quiet "PP5"
 # After a restart of the counter the average runs over the REAL span, not a full week:
 # 2% used at the start of a 4.5-day window is 2.0 points ahead, where a seven-day
 # denominator would print 1.3.
@@ -1008,12 +1012,12 @@ h=$(new_home); conf "$h" "PUBLISH_STATE=no"
 WREset=$((NOW + 388800))
 render_at 200 "$h" "$(payload 10 40 $((NOW + 7200)) "$WREset")"
 render_at 200 "$h" "$(payload 10 2 $((NOW + 7260)) "$WREset")"
-has   "V6  a restarted window measures the points on its own span" "(+2.0% | +2h " "$L2"
+has   "PP6  a restarted window measures the points on its own span" "(+2.0% | +2h " "$L2"
 # The standalone form, used when the bracket does not fit, carries both units too.
 h=$(new_home); conf "$h" "PUBLISH_STATE=no"
 render_at 80 "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
-has   "V7  the block of its own on a narrow terminal keeps both"  "pace +4.2% | +7h " "$OUT"
-quiet "V8"
+has   "PP7  the block of its own on a narrow terminal keeps both"  "pace +4.2% | +7h " "$OUT"
+quiet "PP8"
 
 # ================================================== 5c-bis. a restart announced in advance
 section "A restart announced in advance: RESET_AT_RENEWAL"
@@ -1964,6 +1968,31 @@ install_into "$h" --yes
 h=$(new_home)
 HOME="$h" PATH="$shim:$PATH" sh "$INST" < /dev/null > "$h/log" 2>&1
 [ "$?" -ne 0 ] && ok || bad "I9  no terminal and no --yes: refuses" "non-zero exit" "0"
+
+# PIPED IN, AS THE README SAYS TO. Every case above runs the installer as a FILE, and the one
+# command the README hands out runs it from a pipe, where it has no file and no folder: from
+# the first cut until 1.4.13 `curl … | bash` died on its first line with "BASH_SOURCE[0]:
+# unbound variable" and nothing here noticed. curl is a shim serving this checkout, so the
+# case needs no network; it is run from an empty folder, so nothing can be picked up next door.
+pipeshim=$(mktemp -d "$ROOT/pipeshim.XXXXXX")
+cat > "$pipeshim/curl" <<SHIM
+#!/bin/sh
+out=""; url=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in -o) out="\$2"; shift ;; -*) ;; *) url="\$1" ;; esac
+    shift
+done
+f="$REPO/\${url##*/}"
+[ -f "\$f" ] || exit 22
+if [ -n "\$out" ]; then cp "\$f" "\$out"; else cat "\$f"; fi
+SHIM
+chmod +x "$pipeshim/curl"
+h=$(new_home); mkdir -p "$h/empty"
+(cd "$h/empty" && HOME="$h" PATH="$pipeshim:$shim:$PATH" bash -s -- --yes < "$INST" > "$h/install.log" 2>&1)
+equals "I10 piped into bash, as the README says, it installs" "0" "$?"
+hasnt "I10b and it did not die on its own location" "unbound variable" "$(cat "$h/install.log")"
+cmp -s "$REPO/statusline.sh" "$h/.claude/statusline.sh" && ok \
+    || bad "I10c the fetched status line is the one installed" "identical" "different or absent"
 
 # ================================================================== autonomous mode
 section "Autonomous mode: presence and the level it was set to"

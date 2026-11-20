@@ -22,7 +22,7 @@ amber you are burning faster than the window refills.
 
 ```
  pacekeeper   main* ↑1 ██████░░░░ 62% [Opus 5] [high]
-  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+2.7% | +4h 34m)   │   plan Max 5x · billed in 12d
+  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+2.7% | +4h 34m)   │   Max 5x (-12d)
   bmad 7-4 ⏵ 47m (dev-running)
 ```
 
@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.13/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.14/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.13/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.14/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -273,7 +273,7 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
 | **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%)` | on a Claude.ai subscription |
 | **7-day pace** | `(+17.3% \| +1d 5h)`, in brackets on the 7-day block — or `7d pace +17.3% \| +1d 5h` on its own when the line is too narrow | with the 7-day window |
-| **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
+| **Plan & billing** | `Max 5x (-12d)` | plan always; the countdown once you configure the date |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
 the colour never contradicts the number. Green above 25% left, orange below, red below 10%.
@@ -385,6 +385,11 @@ account's hour is — not from midnight, because that is the boundary Anthropic 
 follows an upgrade or a downgrade on its own. The billing countdown is the one thing Claude Code
 does not expose, so it is the one thing you configure — and the installer walks you through
 finding it, including the exact prompt to hand to Claude Code so it can look it up for you.
+
+The countdown to the next charge sits in brackets on the plan name: `Max 5x (-12d)` is twelve
+days to go, `(tomorrow)` and `(today)` turn green, and inside the last day it counts hours,
+`(-5h 12m)`. If the plan name is not known, the bracket would have nothing to hang on, so the
+charge keeps its words: `billed in 12d`.
 
 The countdown knows the *instant*, not just the day: a subscription that renewed at 15:41 stops
 saying "today" at 15:41, not at midnight.

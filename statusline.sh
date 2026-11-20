@@ -466,7 +466,7 @@ esac
 case "$UI_LANG" in
 it)
     T_LEFT="resta";        T_RESETS="si azzera tra";  T_STILL="oggi ancora"
-    T_OVER="oggi oltre di"; T_SUB="abbonamento";      T_BILL="addebito"
+    T_OVER="oggi oltre di"; T_BILL="addebito"
     T_TODAY="oggi";        T_TOMORROW="domani";       T_IN="tra"
     T_DAY="g";             T_DAY_IDX="g%s";           T_OF="su"
     T_PACE="passo"
@@ -479,7 +479,7 @@ it)
     ;;
 fr)
     T_LEFT="reste";        T_RESETS="reset dans";     T_STILL="auj. encore"
-    T_OVER="auj. dépassé de"; T_SUB="forfait";        T_BILL="prélèvement"
+    T_OVER="auj. dépassé de"; T_BILL="prélèvement"
     T_TODAY="aujourd'hui"; T_TOMORROW="demain";       T_IN="dans"
     T_DAY="j";             T_DAY_IDX="j%s";           T_OF="sur"
     T_PACE="rythme"
@@ -492,7 +492,7 @@ fr)
     ;;
 de)
     T_LEFT="übrig";        T_RESETS="Reset in";       T_STILL="heute noch"
-    T_OVER="heute drüber um"; T_SUB="Abo";            T_BILL="Abbuchung"
+    T_OVER="heute drüber um"; T_BILL="Abbuchung"
     T_TODAY="heute";       T_TOMORROW="morgen";       T_IN="in"
     T_DAY="T";             T_DAY_IDX="T%s";           T_OF="von"
     T_PACE="Tempo"
@@ -505,7 +505,7 @@ de)
     ;;
 es)
     T_LEFT="queda";        T_RESETS="se reinicia en"; T_STILL="hoy aún"
-    T_OVER="hoy excedido en"; T_SUB="plan";           T_BILL="cobro"
+    T_OVER="hoy excedido en"; T_BILL="cobro"
     T_TODAY="hoy";         T_TOMORROW="mañana";       T_IN="en"
     T_DAY="d";             T_DAY_IDX="d%s";           T_OF="de"
     T_PACE="ritmo"
@@ -518,7 +518,7 @@ es)
     ;;
 ja)
     T_LEFT="残り";         T_RESETS="リセットまで";   T_STILL="今日あと"
-    T_OVER="今日超過";     T_SUB="プラン";            T_BILL="請求"
+    T_OVER="今日超過";     T_BILL="請求"
     T_TODAY="今日";        T_TOMORROW="明日";         T_IN="あと"
     T_DAY="日";            T_DAY_IDX="%s日目";        T_OF="/"
     T_PACE="ペース"
@@ -531,7 +531,7 @@ ja)
     ;;
 zh)
     T_LEFT="剩余";         T_RESETS="距重置";         T_STILL="今日尚余"
-    T_OVER="今日超出";     T_SUB="套餐";              T_BILL="扣费"
+    T_OVER="今日超出";     T_BILL="扣费"
     T_TODAY="今天";        T_TOMORROW="明天";         T_IN="还有"
     T_DAY="天";            T_DAY_IDX="第%s天";        T_OF="/"
     T_PACE="节奏"
@@ -544,7 +544,7 @@ zh)
     ;;
 *)
     T_LEFT="left";         T_RESETS="resets in";      T_STILL="today still"
-    T_OVER="today over by"; T_SUB="plan";             T_BILL="billed"
+    T_OVER="today over by"; T_BILL="billed"
     T_TODAY="today";       T_TOMORROW="tomorrow";     T_IN="in"
     T_DAY="d";             T_DAY_IDX="d%s";           T_OF="of"
     T_PACE="pace"
@@ -2261,6 +2261,7 @@ if [ -n "$renew_days" ] || [ -n "$tier_label" ]; then
     # RENEWAL_TIME=ab:cd - `10#ab` printed a bash error onto the terminal and every line
     # after it inside this `if`, `renew_block` included, never ran: the plan and the charge
     # vanished from the status line together, and nothing said why.
+    renew_short=""
     renew_time="$renew_hhmm"
     case "$renew_time" in
         [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
@@ -2270,24 +2271,39 @@ if [ -n "$renew_days" ] || [ -n "$tier_label" ]; then
         _rt=$(( midnight_ts + renew_days * 86400 + 10#${renew_time%%:*} * 3600 + 10#${renew_time##*:} * 60 ))
         if [ "$_rt" -gt "$now" ]; then
             renew_when="${T_IN} $(fmt_dh $(( _rt - now )))"
+            renew_short="-$(fmt_dh $(( _rt - now )))"
         fi
     fi
     if [ -z "$renew_when" ] && [ -n "$renew_days" ]; then
         case "$renew_days" in
-            0) renew_when="$T_TODAY" ;;
-            1) renew_when="$T_TOMORROW" ;;
-            *) renew_when="${T_IN} ${renew_days}${T_DAY}" ;;
+            0) renew_when="$T_TODAY";    renew_short="$T_TODAY" ;;
+            1) renew_when="$T_TOMORROW"; renew_short="$T_TOMORROW" ;;
+            *) renew_when="${T_IN} ${renew_days}${T_DAY}"; renew_short="-${renew_days}${T_DAY}" ;;
         esac
     fi
-    renew_block="${GRAY}${T_SUB}"
-    [ -n "$tier_label" ] && renew_block="${renew_block} ${CYAN}${tier_label}${GRAY}"
-    # With no renewal date configured the charge is not mentioned at all: better a block with
-    # only the plan in it than the word "billed" followed by nothing.
-    if [ -n "$renew_when" ]; then
+    # NO WORDS AROUND THE PLAN AND THE CHARGE. Ema, 2026-11-20: line two keeps growing, and
+    # `abbonamento Max 5x · addebito tra 25g` spent twenty-five columns on two labels. Now it
+    # reads `Max 5x (-25g)`: the countdown to the charge in brackets on the plan, like the
+    # pace on the quota blocks; `(oggi)` and `(domani)` stay words, and inside the last day it
+    # counts hours, `(-5h 12m)`. With no plan name known there is nothing for a bare bracket
+    # to hang on, so the charge keeps its label: `addebito tra 25g`.
+    renew_block="${GRAY}"
+    if [ -n "$tier_label" ]; then
+        renew_block="${renew_block}${CYAN}${tier_label}${GRAY}"
+        # With no renewal date configured the charge is not mentioned at all: better a block
+        # with only the plan in it than an empty bracket.
+        if [ -n "$renew_short" ]; then
+            if [ "$renew_days" -le 1 ] 2>/dev/null; then
+                renew_block="${renew_block} ${GIT_GREEN}(${renew_short})${GRAY}"
+            else
+                renew_block="${renew_block} (${renew_short})"
+            fi
+        fi
+    elif [ -n "$renew_when" ]; then
         if [ "$renew_days" -le 1 ] 2>/dev/null; then
-            renew_block="${renew_block} · ${T_BILL} ${GIT_GREEN}${renew_when}${GRAY}"
+            renew_block="${renew_block}${T_BILL} ${GIT_GREEN}${renew_when}${GRAY}"
         else
-            renew_block="${renew_block} · ${T_BILL} ${renew_when}"
+            renew_block="${renew_block}${T_BILL} ${renew_when}"
         fi
     fi
 fi

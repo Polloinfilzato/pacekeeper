@@ -20,8 +20,20 @@
 #     message then gets printed over a failure.
 set -euo pipefail
 
-VERSION="1.4.13"
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="1.4.14"
+# PIPED IN, THE SCRIPT HAS NO FILE AND NO FOLDER. `curl … | bash` is the install command the
+# README hands out, and there `BASH_SOURCE` is unset: under `set -u` the bare
+# `${BASH_SOURCE[0]}` killed the installer on its first line, with "unbound variable" and
+# nothing installed (bash 3.2 and 5.3 alike, measured 2026-11-20 on the published v1.4.13).
+# An empty SRC_DIR is the honest answer: no file next to it, so the fetch below runs. Falling
+# back to `$0` or to the current folder would instead install whatever `statusline.sh`
+# happens to sit in the directory the command was typed from.
+_pk_self="${BASH_SOURCE[0]:-}"
+if [ -n "$_pk_self" ] && [ -f "$_pk_self" ]; then
+    SRC_DIR="$(cd "$(dirname "$_pk_self")" && pwd)"
+else
+    SRC_DIR=""
+fi
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS="$CLAUDE_DIR/settings.json"
 CONF="$CLAUDE_DIR/subscription.conf"
