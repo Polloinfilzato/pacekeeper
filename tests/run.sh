@@ -983,6 +983,38 @@ has   "S7  a 120-column terminal keeps the yardstick"            " of 14.3%" "$O
 render "$h" "$(payload 22.5 41.2)"
 has   "S8  and so does an unknown width"                         " of 14.3%" "$OUT"
 
+# ================================================== 5c-ter. the seven-day pace in two units
+section "The seven-day pace in percentage points as well as in time"
+
+# Ema, 2026-11-20: the time figure alone (`+7h 8m`) does not say how far above the average
+# that is in the unit the rest of the block speaks, so the bracket carries both:
+# `(+4.2% | +7h 8m)`. The average spends the 100% evenly over the span; the distance from
+# it, in points, is 100 * pace / span - the same fact as the time, never a second opinion.
+h=$(new_home); conf "$h" "PUBLISH_STATE=no"
+NOW=$(date +%s)
+render_at 200 "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
+has   "V1  the reported case: 93% used with 18h53m left"          "(+4.2% | +7h " "$L2"
+render_at 200 "$h" "$(payload 20 10 $((NOW + 7200)) $((NOW + 302400)))"
+has   "V2  behind the average, both halves carry the minus"       "(-40.0% | -2d 19h)" "$L2"
+render_at 200 "$h" "$(payload 20 50 $((NOW + 7200)) $((NOW + 302400)))"
+has   "V3  exactly on the average there is no sign to give"       "(0% | 0h)" "$L2"
+COLUMNS=200 render_lang it "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
+has   "V4  the points use the decimal separator of the language"  "(+4,2% | +7h " "$L2"
+quiet "V5"
+# After a restart of the counter the average runs over the REAL span, not a full week:
+# 2% used at the start of a 4.5-day window is 2.0 points ahead, where a seven-day
+# denominator would print 1.3.
+h=$(new_home); conf "$h" "PUBLISH_STATE=no"
+WREset=$((NOW + 388800))
+render_at 200 "$h" "$(payload 10 40 $((NOW + 7200)) "$WREset")"
+render_at 200 "$h" "$(payload 10 2 $((NOW + 7260)) "$WREset")"
+has   "V6  a restarted window measures the points on its own span" "(+2.0% | +2h " "$L2"
+# The standalone form, used when the bracket does not fit, carries both units too.
+h=$(new_home); conf "$h" "PUBLISH_STATE=no"
+render_at 80 "$h" "$(payload 20 93 $((NOW + 7200)) $((NOW + 67980)))"
+has   "V7  the block of its own on a narrow terminal keeps both"  "pace +4.2% | +7h " "$OUT"
+quiet "V8"
+
 # ================================================== 5c-bis. a restart announced in advance
 section "A restart announced in advance: RESET_AT_RENEWAL"
 

@@ -1536,14 +1536,24 @@ EOF
         # which on a seven-day window is nearly 50 minutes: at 0.49% used `week_left` is 100,
         # and a real `+48m` printed as `0h`. Never feed a rounded figure into arithmetic whose
         # output is finer than the rounding.
-        IFS=' ' read -r _wp_sec _wp_col <<EOF
-$(LC_ALL=C awk -v p="$week_pct" -v left="$week_rem" -v win="${week_span:-604800}" 'BEGIN{
+        # THE SAME FIGURE IN PERCENTAGE POINTS travels out as a third field. Ema, 2026-11-20:
+        # «(+x% | +7h 8m) dove +x% e il corrispettivo espresso in punti percentuale di quanto
+        # si sia sopra rispetto alla media». The average is the straight line that spends the
+        # 100% evenly over the span, so by now it would have used 100 * (win - left) / win;
+        # the distance from it is p minus that, which simplifies to exactly 100 * x / win.
+        # One fact in two units, never two measurements: the two can never disagree in sign.
+        # Computed from the raw x, before the rounding to seconds. Unsigned here, with the
+        # locale separator; the sign is added below from the time figure, so that a pace that
+        # prints as 0h never carries a +0.0%.
+        IFS=' ' read -r _wp_sec _wp_col _wp_pp <<EOF
+$(LC_ALL=C awk -v p="$week_pct" -v left="$week_rem" -v win="${week_span:-604800}" -v dsep="$T_DECSEP" 'BEGIN{
     if (win < 3600) win = 604800
     rem = 100 - p; if (rem < 0) rem = 0; if (rem > 100) rem = 100
     if (left < 0) left = 0
     if (left > win) left = win          # a reset further out than the window is not one
     x = left - win * rem / 100
-    printf "%d %s", int(x + (x >= 0 ? 0.5 : -0.5)), (x > 86400 ? "R" : (x > 28800 ? "A" : (x >= -86400 ? "G" : "Y")))
+    pp = sprintf("%.1f", 100 * (x < 0 ? -x : x) / win); sub(/\./, dsep, pp)
+    printf "%d %s %s", int(x + (x >= 0 ? 0.5 : -0.5)), (x > 86400 ? "R" : (x > 28800 ? "A" : (x >= -86400 ? "G" : "Y"))), pp
 }')
 EOF
         if [ -n "$_wp_sec" ]; then
@@ -1566,6 +1576,13 @@ EOF
                 _wp_txt="$(fmt_dh "$_wp_abs")"
             fi
             [ "$_wp_abs" -ge 60 ] && { [ "$_wp_sec" -lt 0 ] && _wp_txt="-${_wp_txt}" || _wp_txt="+${_wp_txt}"; }
+            # The percentage takes the sign of the time figure, and none when that reads 0h.
+            if [ "$_wp_abs" -lt 60 ]; then
+                _wp_pct="0%"
+            else
+                _wp_pct="${_wp_txt%%[!+-]*}${_wp_pp:-0}%"
+            fi
+            _wp_txt="${_wp_pct} | ${_wp_txt}"
             # IT IS ITS OWN BLOCK: see the width note above. It carries the "7d" prefix because
             # a bare "+29h" after a separator could be taken for the five-hour figure, which is
             # the one thing it must never be.

@@ -10,19 +10,19 @@ useless on its own — it does not tell you whether 42% on a Tuesday is comforta
 `—pacekeeper—>` answers the question you are actually asking:
 
 ```
-7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+4h 34m)
+7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+2.7% | +4h 34m)
 ```
 
 Read it as: *you are on day 3 of a 7-day window, you have 58% left, and out of a day worth 14.3%
 you can still spend 0.9% before it is over without eating into the days that come after — and at
 the average pace
-your quota runs out 4 hours and 34 minutes before the window does, so you are a little ahead of
-yourself.* When the first bracket goes red you are borrowing from tomorrow; when the second turns
+you are 2.7 points above the even spread — your quota runs out 4 hours and 34 minutes before the
+window does — so you are a little ahead of yourself.* When the first bracket goes red you are borrowing from tomorrow; when the second turns
 amber you are burning faster than the window refills.
 
 ```
  pacekeeper   main* ↑1 ██████░░░░ 62% [Opus 5] [high]
-  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+4h 34m)   │   plan Max 5x · billed in 12d
+  5h left 78% · resets in 1h 12m (-2h 42m)   │   7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%) (+2.7% | +4h 34m)   │   plan Max 5x · billed in 12d
   bmad 7-4 ⏵ 47m (dev-running)
 ```
 
@@ -43,7 +43,7 @@ Or, without cloning — note the **version tag**, not a branch, so what you inst
 that was actually tried rather than whatever was pushed a minute ago:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.12/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.13/install.sh | bash
 ```
 
 The questions still work through a pipe: they are read from your terminal, not from standard
@@ -97,7 +97,7 @@ honestly be offered: an update could take any of these numbers away without warn
 The same command, at the newer tag — the installer is the updater:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.12/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Polloinfilzato/pacekeeper/v1.4.13/install.sh | bash
 ```
 
 or, from a clone, `git pull && ./install.sh`. What happens on a machine that already has it:
@@ -272,7 +272,7 @@ a model ships, and a cost that is quietly wrong is worse than no cost at all.
 |---|---|---|
 | **5-hour window** | `5h left 44% · resets in 2h 16m (+4m)` | on a Claude.ai subscription |
 | **7-day window** | `7d d3/7 left 58% · resets in 4d 6h (today still 0.9% of 14.3%)` | on a Claude.ai subscription |
-| **7-day pace** | `(+1g 5h)`, in brackets on the 7-day block — or `7d pace +1g 5h` on its own when the line is too narrow | with the 7-day window |
+| **7-day pace** | `(+17.3% \| +1d 5h)`, in brackets on the 7-day block — or `7d pace +17.3% \| +1d 5h` on its own when the line is too narrow | with the 7-day window |
 | **Plan & billing** | `plan Max 5x · billed in 12d` | plan always; the countdown once you configure the date |
 
 **The two windows.** Both percentages are *remaining*, not used, so bigger is always better and
@@ -311,6 +311,14 @@ pace                                      =  time to the reset  −  that
 | `+1g 5h` | the weekly allowance dies a day and five hours before the window reopens |
 | `-8h` | eight hours' worth of allowance will expire unused |
 | `0h` | the two run out together |
+
+**The same pace in points, next to the time.** `(+2.7% | +4h 34m)`: the first half is how far you
+are above the average, in the same percentage points as the rest of the block. The average spends
+the 100% evenly over the window, so by now it would have used `100 × elapsed / window`; the
+distance from it is `used% − that`, which works out to exactly `100 × pace / window`. One fact in
+two units, never a second opinion: the two halves always carry the same sign, and when the time
+reads `0h` the points read `0%`. Like the time, it is measured over the window's real length, so
+after a counter restart a point is a larger share of a shorter week.
 
 Three things about it are deliberate.
 
